@@ -1,0 +1,33 @@
+# po-guard policy. Amounts are in the company currency.
+
+[approval]
+# An order needs an approver whose tier limit covers its total. Ordered low to high.
+tiers = [
+  { name = "manager",  limit = 50000 },
+  { name = "director", limit = 250000 },
+  { name = "cfo",      limit = 1e12 },
+]
+
+[split]
+# Live orders to the same supplier and cost centre within this many days are summed.
+window_days = 14
+
+[price]
+warn_above_pct = 10
+block_above_pct = 50
+
+[duplicate_supplier]
+warn_token_set_ratio = 90
+
+[fiscal_year]
+start_month = 1
+
+[confirmation]
+ttl_minutes = 15
+
+# Users and their approval tier. Anyone not listed can request but not approve.
+[users]
+"requester@example.com"   = { role = "requester" }
+"requester2@example.com"  = { role = "requester" }
+"manager@example.com"     = { role = "approver", tier = "manager" }
+"director@example.com"    = { role = "approver", tier = "director" }

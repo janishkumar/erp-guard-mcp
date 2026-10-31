@@ -14,6 +14,7 @@ import pytest
 
 from erp_guard.connectors.erpnext import ErpNext, HardLimitError
 from erp_guard.env import load_env
+from erp_guard.generic.actions import meta_of
 from erp_guard.models import Status
 from erp_guard.policy import load_policy
 from erp_guard.service import Service
@@ -115,10 +116,55 @@ def test_duplicate_supplier_against_real_master():
 
 def test_hard_limits_hold_against_the_real_client():
     erp = ErpNext.from_env("REQUESTER")
+    # Payment Entry is pack-owned, so the client lets it through to the pack's checks; a
+    # ledger-posting type with no pack, and the system's own types, it never writes.
+    for doctype in ("Journal Entry", "Bank Account", "User"):
+        with pytest.raises(HardLimitError):
+            erp.c.request("POST", f"/api/resource/{doctype}", body={})
+        with pytest.raises(HardLimitError):
+            erp.c.request("GET", f"/api/resource/{doctype}")
     with pytest.raises(HardLimitError):
-        erp.c.request("GET", "/api/resource/Payment Entry")
+        erp.c.request("PUT", "/api/resource/ERP Guard Audit/x", body={"outcome": "written"})
     with pytest.raises(HardLimitError):
         erp.c.request("DELETE", "/api/resource/Supplier/TRANE U.S. INC")
     with pytest.raises(HardLimitError):
         erp.c.request("PUT", "/api/resource/Supplier/TRANE U.S. INC",
                       body={"default_bank_account": "x"})
+
+
+def test_live_generic_task_create_and_update():
+    """A later-phase type through the generic tools: create, update, audit in ERPNext. Tasks
+    can't be cancelled, so the test closes its Task by setting it to Cancelled."""
+    req = svc("REQUESTER")
+    subject = f"live generic {uuid.uuid4().hex[:6]}"
+    p, out = run(req, "create_document", {"doctype": "Task", "fields": {"subject": subject}})
+    assert out.outcome == "written", (out.message, [r.message for r in p.checks])
+    task = out.target
+    assert req.erp.get_doc("Task", task)["subject"] == subject
+    p, upd = run(req, "update_document", {"doctype": "Task", "name": task,
+                                          "fields": {"subject": subject + " (b)"}})
+    assert f"subject: '{subject}' → '{subject} (b)'" in p.summary
+    assert upd.outcome == "written", upd.message
+    _, done = run(req, "update_document", {"doctype": "Task", "name": task,
+                                           "fields": {"status": "Cancelled"}})
+    assert done.outcome == "written", done.message
+    doc = req.erp.get_doc("Task", task)
+    assert doc["subject"] == subject + " (b)" and doc["status"] == "Cancelled"
+    trail = req.erp.read_audit(task, limit=10)
+    assert [a.action for a in trail] == ["update_document", "update_document",
+                                         "create_document"]
+    assert {a.outcome for a in trail} == {"written"}
+
+
+def test_live_generic_scope_and_workflow_detection():
+    req = svc("REQUESTER")
+    meta, _ = meta_of(req, "Task")
+    assert meta.has_workflow is False  # getdoctype's __workflow_docs, empty with no workflow
+    w = req.erp.c.writable
+    assert w("Task") and w("Purchase Order") and not w("Journal Entry")
+    assert not w("Cost Center") and not w("Server Script")
+    p = req.preview("create_document", {"doctype": "Journal Entry", "fields": {}})
+    assert p.blocked and "ledger" in p.checks[0].message
+    out = req.execute("create_document", {"doctype": "Server Script", "fields": {}}, None)
+    assert out.outcome == "refused"
+    assert "Projects User" in req.erp.roles()

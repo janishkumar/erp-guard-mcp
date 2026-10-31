@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
 class Pack(Protocol):
     name: str
+    # Task tools by the document type they work on, preferred over the generic tools.
+    task_tools: dict[str, tuple[str, ...]]
 
     def owns(self, doctype: str) -> bool:
         """True if writes to this document type must go through this pack's checks."""

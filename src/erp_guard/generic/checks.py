@@ -80,7 +80,8 @@ def _type_problem(fm: FieldMeta, value) -> str | None:
     return None
 
 
-def _row_problems(meta: DocMeta, row, path: str, for_create: bool) -> list[str]:
+def _row_problems(meta: DocMeta, row, path: str, for_create: bool,
+                  required: bool = True) -> list[str]:
     if not isinstance(row, dict):
         return [f"{path} must be an object"]
     out = []
@@ -96,20 +97,21 @@ def _row_problems(meta: DocMeta, row, path: str, for_create: bool) -> list[str]:
             out.append(f"{path}.{key} is not a field of {meta.doctype}")
             continue
         if fm.fieldtype in TABLE_TYPES:
-            out += _table_problems(meta, key, fm, value, f"{path}.{key}")
+            out += _table_problems(meta, key, fm, value, f"{path}.{key}", required)
         elif not _empty(value):
             problem = _type_problem(fm, value)
             if problem:
                 out.append(f"{path}.{key} {problem}")
     for key, fm in meta.fields.items():
-        if not fm.reqd or fm.server_filled or fm.read_only:
+        if not required or not fm.reqd or fm.server_filled or fm.read_only:
             continue
         if (key not in row and for_create) or (key in row and _empty(row[key])):
             out.append(f"{path}.{key} is required")
     return out
 
 
-def _table_problems(meta: DocMeta, key: str, fm: FieldMeta, value, path: str) -> list[str]:
+def _table_problems(meta: DocMeta, key: str, fm: FieldMeta, value, path: str,
+                    required: bool = True) -> list[str]:
     if not isinstance(value, list):
         return [f"{path} must be a list of rows"]
     child = meta.children.get(key)
@@ -121,13 +123,16 @@ def _table_problems(meta: DocMeta, key: str, fm: FieldMeta, value, path: str) ->
     out = []
     for i, row in enumerate(value):
         # Rows replace the table wholesale, so each is checked as a new row.
-        out += _row_problems(child, row, f"{path}[{i}]", for_create=True)
+        out += _row_problems(child, row, f"{path}[{i}]", for_create=True, required=required)
     return out
 
 
-def known_fields(meta: DocMeta, fields: dict, for_create: bool) -> list[CheckResult]:
-    """Every field exists, has the right type, and (on create) the required ones are there."""
-    problems = _row_problems(meta, fields, meta.doctype, for_create)
+def known_fields(meta: DocMeta, fields: dict, for_create: bool,
+                 required: bool = True) -> list[CheckResult]:
+    """Every field exists, has the right type, and (on create) the required ones are there.
+    `required=False` skips the required-field rule, for writes where a pack builds the
+    full document from the fields it is given."""
+    problems = _row_problems(meta, fields, meta.doctype, for_create, required)
     if not problems:
         return [CheckResult("known fields", PASS, f"All fields fit {meta.doctype}.")]
     return [CheckResult("known fields", BLOCK, p, {"doctype": meta.doctype}) for p in problems]

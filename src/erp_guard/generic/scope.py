@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -78,3 +79,20 @@ def classify(rules: ScopeRules, doctype: str, module: str, issingle: bool, pack_
             return Scope.NEVER  # submittable and unreviewed: fail closed
         return Scope.GENERIC
     return Scope.NEVER
+
+
+WRITABLE = frozenset({Scope.GENERIC, Scope.LATER, Scope.PACK})
+
+
+def writable_predicate(rules: ScopeRules, meta_of: Callable[[str], dict],
+                       pack_owned: Callable[[str], bool]) -> Callable[[str], bool]:
+    """For the ERP client: may anything be written to this document type? `meta_of` returns
+    the DocType document; a type whose metadata can't be read is not writable."""
+    def writable(doctype: str) -> bool:
+        try:
+            m = meta_of(doctype)
+        except Exception:  # noqa: BLE001 - unknown or unreadable: fail closed
+            return False
+        return classify(rules, doctype, m.get("module") or "", bool(m.get("issingle")),
+                        pack_owned(doctype), bool(m.get("is_submittable"))) in WRITABLE
+    return writable

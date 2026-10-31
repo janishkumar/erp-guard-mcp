@@ -10,16 +10,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING
 
 from erp_guard import checks as C
 from erp_guard.connectors.base import ErpConnector, ErpError
 from erp_guard.models import AuditRecord
 from erp_guard.policy import Policy
 
+if TYPE_CHECKING:
+    from erp_guard.packs.base import Pack
+
 _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I/L
 
 # Modules whose ACTIONS list joins the default registry. A new pack module adds itself here.
-_ACTION_MODULES = ("erp_guard.packs.p2p.orders",)
+_ACTION_MODULES = ("erp_guard.packs.p2p.orders", "erp_guard.generic.actions")
 
 
 class InvalidArgs(ValueError):
@@ -196,10 +200,16 @@ def __getattr__(name: str):
 class Service:
     def __init__(self, erp: ErpConnector, policy: Policy,
                  today: Callable[[], date] = date.today,
-                 now: Callable[[], datetime] = datetime.now):
+                 now: Callable[[], datetime] = datetime.now,
+                 packs: list[Pack] | None = None):
         self.erp, self.policy, self.today = erp, policy, today
         self.codes = CodeBook(timedelta(minutes=policy.code_ttl_minutes), now)
         self._actor: str | None = None
+        if packs is None:
+            from erp_guard.packs.p2p.pack import P2PPack
+            packs = [P2PPack()]
+        # Generic writes to a document type a pack owns are handed to that pack.
+        self.packs: list[Pack] = packs
         self.actions: dict[str, Action] = {}
         self.register(*default_actions())
 

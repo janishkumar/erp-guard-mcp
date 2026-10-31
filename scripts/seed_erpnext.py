@@ -38,7 +38,8 @@ AUDIT = "ERP Guard Audit"
 TODAY = date.today()
 
 USERS = {
-    "requester@example.com": ("Riley", "Requester", ["Purchase User"]),
+    # Projects User: Task is a later-phase type the generic tools write (live generic test).
+    "requester@example.com": ("Riley", "Requester", ["Purchase User", "Projects User"]),
     "requester2@example.com": ("Sam", "Second-Requester", ["Purchase User"]),
     "manager@example.com": ("Morgan", "Manager", ["Purchase User", "Purchase Manager"]),
     "director@example.com": ("Dana", "Director", ["Purchase User", "Purchase Manager"]),

@@ -119,29 +119,36 @@ class FrappeClient:
         self.writable = writable
         self.allowed_bank_values = frozenset(allowed_bank_values)
 
-    def _require_writable(self, doctype) -> None:
+    def _require_writable(self, doctype, creating: bool = False) -> None:
+        if doctype == AUDIT_DOCTYPE:
+            # The trail is append-only: records are created, never changed.
+            if not creating:
+                raise HardLimitError(f"{AUDIT_DOCTYPE} records are never changed")
+            return
         if not isinstance(doctype, str) or not doctype or not self.writable(doctype):
             raise HardLimitError(f"doctype not writable: {doctype}")
 
-    def _write_targets(self, method: str, body) -> list:
-        """The document types a write method touches, read from its arguments."""
+    def _write_targets(self, method: str, body) -> list[tuple[object, bool]]:
+        """The document types a write method touches, read from its arguments, each with
+        whether the write only creates a new document of that type."""
         where = WRITE_METHODS[method]
         body = body if isinstance(body, dict) else {}
         if where == "doctype":
-            return [body.get("doctype")]
+            return [(body.get("doctype"), False)]
         if where == "dt":
             if (body.get("dt"), body.get("method")) not in DOC_METHODS or not body.get("dn"):
                 raise HardLimitError(f"document method not allowed: {body.get('method')}")
             if not isinstance(body.get("args"), dict | None):
                 raise HardLimitError("document method args must be an object")
-            return [body["dt"]]
+            return [(body["dt"], False)]
         if where == "doc":
             doc = body.get("doc")
             if not isinstance(doc, dict):
                 raise HardLimitError(f"{method} needs the document as an object")
-            # A child row inserted on its own is written into its parent.
-            return [doc.get("doctype")] + ([doc["parenttype"]] if doc.get("parenttype") else [])
-        return [where]
+            # A child row inserted on its own is written into its parent, which changes.
+            parent = [(doc["parenttype"], False)] if doc.get("parenttype") else []
+            return [(doc.get("doctype"), method == "frappe.client.insert")] + parent
+        return [(where, False)]
 
     def _check_bank(self, body, doctype: str | None) -> None:
         bad = set()
@@ -178,7 +185,8 @@ class FrappeClient:
                 if name not in RESOURCES and not self.writable(name):
                     raise HardLimitError(f"doctype not allowed: {name}")
             else:
-                self._require_writable(name)
+                # POST to the collection creates; anything naming a record changes it.
+                self._require_writable(name, creating=verb == "POST" and not m.group(3))
         elif name not in METHODS:
             raise HardLimitError(f"method not allowed: {name}")
         elif name in GET_ONLY_METHODS and verb != "GET":
@@ -186,8 +194,8 @@ class FrappeClient:
         elif name in WRITE_METHODS:
             if verb != "POST":
                 raise HardLimitError(f"{name} is sent with POST only")
-            for target in self._write_targets(name, body):
-                self._require_writable(target)
+            for target, creating in self._write_targets(name, body):
+                self._require_writable(target, creating)
         if body is not None:
             self._check_bank(body, doctype)
 
@@ -304,8 +312,10 @@ class ErpNext:
         client = FrappeClient(os.environ.get("ERPNEXT_URL", "http://localhost:8080"),
                               os.environ[kname], os.environ[sname],
                               allowed_bank_values={policy.payment.bank_account})
-        return cls(client, os.environ.get("ERPNEXT_COMPANY", "Lakeside Demo Utilities"),
-                   os.environ.get("ERPNEXT_SUPPLIER_GROUP", "Demo Suppliers"))
+        erp = cls(client, os.environ.get("ERPNEXT_COMPANY", "Lakeside Demo Utilities"),
+                  os.environ.get("ERPNEXT_SUPPLIER_GROUP", "Demo Suppliers"))
+        erp.use_scope()
+        return erp
 
     # reads -----------------------------------------------------------------------------
     def whoami(self) -> str:
@@ -320,9 +330,25 @@ class ErpNext:
             return self.c.request("GET", path, params=kwargs).get("message")
         return self.c.request("POST", path, body=kwargs).get("message")
 
+    def use_scope(self, rules=None, pack_owned: Callable[[str], bool] | None = None) -> None:
+        """Write only the document types the scope rules allow (generic, later-phase and
+        pack-owned ones), decided from each type's metadata as this user reads it."""
+        from erp_guard.generic.scope import load_scope, writable_predicate
+        from erp_guard.packs.p2p import P2P_OWNED
+        self.c.writable = writable_predicate(rules or load_scope(), self.get_meta,
+                                             pack_owned or P2P_OWNED.__contains__)
+
+    def roles(self) -> list[str]:
+        """The ERPNext roles of the user this connector acts as."""
+        rows = self.call("frappe.client.get_list", doctype="Has Role", parent="User",
+                         fields=["role"], filters=[["parent", "=", self.whoami()]],
+                         limit_page_length=0)
+        return [r["role"] for r in rows or []]
+
     def get_meta(self, doctype: str) -> dict:
         """The DocType document (fields, permissions, is_submittable, ...) with its child
-        tables' DocTypes under `child_doctypes`, by name."""
+        tables' DocTypes under `child_doctypes`, by name. `__workflow_docs` lists the
+        type's active Workflow (empty when it has none). Cached for the connector's life."""
         if doctype not in self._meta:
             docs = self.c.request("GET", "/api/method/frappe.desk.form.load.getdoctype",
                                   params={"doctype": doctype})["docs"]

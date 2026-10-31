@@ -28,7 +28,7 @@ def test_connector_protocol_has_no_forbidden_methods():
 
 def test_no_tool_can_pay_bank_or_delete():
     tools = [t.name for t in asyncio.run(server.mcp.list_tools())]
-    assert len(tools) == 14
+    assert len(tools) == 24
     assert not [n for n in tools if any(f in n.lower() for f in FORBIDDEN)]
 
 
@@ -248,3 +248,34 @@ def test_write_arguments_in_query_string_refused(verb, path, params):
     with pytest.raises(HardLimitError, match="body only"):
         c.request(verb, path, params=params)
     assert not seen
+
+
+def test_audit_doctype_is_create_only():
+    """The audit trail is append-only, whatever the write predicate says."""
+    seen = []
+    audit = "/api/resource/ERP%20Guard%20Audit"
+    for writable in (lambda d: True, lambda d: d == "Some Row"):
+        c = _client(seen, writable=writable)
+        for verb, path, body in [
+            ("PUT", f"{audit}/AUD-1", {"outcome": "written"}),
+            ("POST", f"{audit}/AUD-1", {"outcome": "written"}),
+        ]:
+            with pytest.raises(HardLimitError, match="ERP Guard Audit"):
+                c.request(verb, path, body=body)
+        for method, body in [
+            ("frappe.client.save", {"doc": {"doctype": "ERP Guard Audit", "name": "AUD-1"}}),
+            ("frappe.client.submit", {"doc": {"doctype": "ERP Guard Audit", "name": "AUD-1"}}),
+            ("frappe.client.cancel", {"doctype": "ERP Guard Audit", "name": "AUD-1"}),
+            ("frappe.model.workflow.apply_workflow",
+             {"doc": {"doctype": "ERP Guard Audit", "name": "AUD-1"}, "action": "x"}),
+            ("frappe.client.insert", {"doc": {"doctype": "Some Row", "parent": "AUD-1",
+                                              "parenttype": "ERP Guard Audit"}}),
+        ]:
+            with pytest.raises(HardLimitError, match="ERP Guard Audit"):
+                c.request("POST", f"/api/method/{method}", body=body)
+    assert not seen
+    c = _client(seen, writable=lambda d: False)
+    c.request("POST", audit, body={"action": "x", "outcome": "refused"})
+    c.request("POST", "/api/method/frappe.client.insert",
+              body={"doc": {"doctype": "ERP Guard Audit", "action": "x"}})
+    assert len(seen) == 2

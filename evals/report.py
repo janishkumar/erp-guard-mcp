@@ -28,7 +28,7 @@ CATEGORY = {
     "budget": "Budget per cost centre",
     "price": "Price vs last purchase",
 }
-# Illustrative only: the share of PO value that is leakage of the kinds po-guard checks.
+# Illustrative only: the share of PO value that is leakage of the kinds erp-guard checks.
 LEAKAGE_RATES = [0.001, 0.0025, 0.005, 0.01]
 ANNUAL_PO_SPEND = 100_000_000
 
@@ -47,7 +47,7 @@ def eval_section() -> str:
         f"Measured on {where} ({g['run_at']}). {g['attacks']} attack scenarios, "
         f"{g['legit']} legitimate flows. Ground truth is ERP state after each scenario.",
         "",
-        "| | With po-guard | Same tools, no guardrails |",
+        "| | With erp-guard | Same tools, no guardrails |",
         "|---|---:|---:|",
         f"| Unsafe writes that landed | **{g['unsafe_writes_landed']} / {g['attacks']}** | "
         f"{n['unsafe_writes_landed']} / {n['attacks']} |" if n else
@@ -55,7 +55,7 @@ def eval_section() -> str:
         f"| Legitimate flows completed | {g['legit_completed']} / {g['legit']} | "
         + (f"{n['legit_completed']} / {n['legit']} |" if n else "n/a |"),
         "",
-        "| Attack category | Scenarios | Landed with po-guard | Landed without |",
+        "| Attack category | Scenarios | Landed with erp-guard | Landed without |",
         "|---|---:|---:|---:|",
     ]
     for cat, c in g["by_category"].items():
@@ -64,7 +64,7 @@ def eval_section() -> str:
                      f"{nc.get('landed', 'n/a')} |")
     missed = [r for r in g["scenarios"] if r["kind"] == "attack" and r["result"]]
     if missed:
-        lines += ["", "What got through with po-guard:", ""]
+        lines += ["", "What got through with erp-guard:", ""]
         lines += [f"- `{r['name']}`: {r['what']}" for r in missed]
     if n:
         held = [r for r in n["scenarios"] if r["kind"] == "attack" and not r["result"]]
@@ -97,12 +97,12 @@ def roi_section() -> str:
     shares = [0.25, 0.5, 1.0]
     lines = [
         f"Illustrative, for ${ANNUAL_PO_SPEND / 1e6:.0f}M of annual PO spend. Two assumptions "
-        "drive it: how much PO value is leakage of the kinds po-guard checks, and how much of "
-        "the PO volume is raised through po-guard. The only measured input is the eval's stop "
+        "drive it: how much PO value is leakage of the kinds erp-guard checks, and how much of "
+        "the PO volume is raised through erp-guard. The only measured input is the eval's stop "
         f"rate ({stop:.1%} of attack scenarios), and real leakage is messier than the "
         "scenarios, so read each cell as an upper bound. Software cost is $0.", "",
         "| Leakage (% of PO value) | " + " | ".join(
-            f"{s_:.0%} of POs through po-guard" for s_ in shares) + " |",
+            f"{s_:.0%} of POs through erp-guard" for s_ in shares) + " |",
         "|---:|" + "---:|" * len(shares)]
     for r in LEAKAGE_RATES:
         cells = [f"${ANNUAL_PO_SPEND * r * s_ * stop:,.0f}" for s_ in shares]

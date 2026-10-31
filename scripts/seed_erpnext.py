@@ -1,7 +1,7 @@
-"""Set up the local ERPNext for po-guard: company, custom fields, audit doctype, demo data.
+"""Set up the local ERPNext for erp-guard: company, custom fields, audit doctype, demo data.
 
 Runs as the local Administrator (password `admin`, set by docker/compose.yml; local
-development only) and deliberately bypasses po-guard: this is the ERP's starting state,
+development only) and deliberately bypasses erp-guard: this is the ERP's starting state,
 not something the MCP does. Idempotent: safe to re-run.
 
 What it loads:
@@ -28,13 +28,13 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from po_guard.demo import ABBR, COMPANY, COST_CENTRES, ITEMS, seed_suppliers  # noqa: E402
+from erp_guard.demo import ABBR, COMPANY, COST_CENTRES, ITEMS, seed_suppliers  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = os.environ.get("ERPNEXT_URL", "http://localhost:8080")
 SUPPLIER_GROUP = "Demo Suppliers"
 ITEM_GROUP = "Demo Purchases"
-AUDIT = "PO Guard Audit"
+AUDIT = "ERP Guard Audit"
 TODAY = date.today()
 
 USERS = {
@@ -43,32 +43,32 @@ USERS = {
     "manager@example.com": ("Morgan", "Manager", ["Purchase User", "Purchase Manager"]),
     "director@example.com": ("Dana", "Director", ["Purchase User", "Purchase Manager"]),
 }
-# Read access to cost centres and items; supplier creation (onboarding is a po-guard tool).
+# Read access to cost centres and items; supplier creation (onboarding is a erp-guard tool).
 USER_ROLES_EXTRA = ["Accounts User", "Stock User", "Purchase Master Manager"]
 
 PO_FIELDS = [
-    {"fieldname": "po_guard_section", "fieldtype": "Section Break", "label": "po-guard",
+    {"fieldname": "erp_guard_section", "fieldtype": "Section Break", "label": "erp-guard",
      "insert_after": "items"},
-    {"fieldname": "po_guard_status", "fieldtype": "Select", "label": "po-guard status",
+    {"fieldname": "erp_guard_status", "fieldtype": "Select", "label": "erp-guard status",
      "options": "Draft\nPending Approval\nApproved\nRejected\nCancelled", "default": "Draft",
-     "allow_on_submit": 1, "in_list_view": 1, "insert_after": "po_guard_section"},
-    {"fieldname": "po_guard_cost_centre", "fieldtype": "Link", "options": "Cost Center",
-     "label": "Cost centre (po-guard)", "insert_after": "po_guard_status"},
-    {"fieldname": "po_guard_approver", "fieldtype": "Data", "label": "Approved by",
-     "allow_on_submit": 1, "read_only": 1, "insert_after": "po_guard_cost_centre"},
-    {"fieldname": "po_guard_reason", "fieldtype": "Small Text", "label": "Reject/cancel reason",
-     "allow_on_submit": 1, "insert_after": "po_guard_approver"},
-    {"fieldname": "po_guard_notes", "fieldtype": "Small Text", "label": "Notes",
-     "insert_after": "po_guard_reason"},
+     "allow_on_submit": 1, "in_list_view": 1, "insert_after": "erp_guard_section"},
+    {"fieldname": "erp_guard_cost_centre", "fieldtype": "Link", "options": "Cost Center",
+     "label": "Cost centre (erp-guard)", "insert_after": "erp_guard_status"},
+    {"fieldname": "erp_guard_approver", "fieldtype": "Data", "label": "Approved by",
+     "allow_on_submit": 1, "read_only": 1, "insert_after": "erp_guard_cost_centre"},
+    {"fieldname": "erp_guard_reason", "fieldtype": "Small Text", "label": "Reject/cancel reason",
+     "allow_on_submit": 1, "insert_after": "erp_guard_approver"},
+    {"fieldname": "erp_guard_notes", "fieldtype": "Small Text", "label": "Notes",
+     "insert_after": "erp_guard_reason"},
 ]
 SUPPLIER_FIELDS = [
-    {"fieldname": "po_guard_onboarded_by", "fieldtype": "Data", "label": "Onboarded by",
+    {"fieldname": "erp_guard_onboarded_by", "fieldtype": "Data", "label": "Onboarded by",
      "read_only": 1, "insert_after": "supplier_group"},
-    {"fieldname": "po_guard_notes", "fieldtype": "Small Text", "label": "Notes",
-     "insert_after": "po_guard_onboarded_by"},
+    {"fieldname": "erp_guard_notes", "fieldtype": "Small Text", "label": "Notes",
+     "insert_after": "erp_guard_onboarded_by"},
 ]
 CC_FIELDS = [
-    {"fieldname": "po_guard_annual_budget", "fieldtype": "Currency", "label": "Annual budget",
+    {"fieldname": "erp_guard_annual_budget", "fieldtype": "Currency", "label": "Annual budget",
      "insert_after": "cost_center_name"},
 ]
 
@@ -132,7 +132,7 @@ def audit_doctype(a: Admin) -> None:
         "doctype": "DocType", "name": AUDIT, "module": "Buying", "custom": 1,
         "autoname": "format:AUD-{#####}", "track_changes": 0, "sort_field": "creation",
         "sort_order": "DESC", "title_field": "action",
-        "description": "Append-only trail of every po-guard write attempt.",
+        "description": "Append-only trail of every erp-guard write attempt.",
         "fields": [
             {"fieldname": "action", "fieldtype": "Data", "label": "Action", "in_list_view": 1,
              "reqd": 1},
@@ -158,7 +158,7 @@ def masters(a: Admin) -> None:
         if not a.exists("Cost Center", name):
             a.insert({"doctype": "Cost Center", "cost_center_name": cc, "company": COMPANY,
                       "parent_cost_center": root, "is_group": 0,
-                      "po_guard_annual_budget": budget})
+                      "erp_guard_annual_budget": budget})
     a.ensure({"doctype": "Supplier Group", "supplier_group_name": SUPPLIER_GROUP,
               "parent_supplier_group": "All Supplier Groups"}, SUPPLIER_GROUP)
     a.ensure({"doctype": "Item Group", "item_group_name": ITEM_GROUP,
@@ -176,7 +176,7 @@ def masters(a: Admin) -> None:
         a.insert({"doctype": "Supplier", "supplier_name": r["name"],
                   "supplier_group": SUPPLIER_GROUP, "supplier_type": "Company",
                   "tax_id": r["synthetic_tax_id"],
-                  "po_guard_notes": "Seeded from the City of Chicago vendor-payments ledger."})
+                  "erp_guard_notes": "Seeded from the City of Chicago vendor-payments ledger."})
     print(f"suppliers: {len(rows)} in seed file")
 
 
@@ -263,13 +263,13 @@ def history(keys: dict[str, tuple[str, str]]) -> None:
             "supplier": rng.choice(suppliers), "company": COMPANY,
             "transaction_date": when.isoformat(),
             "schedule_date": (when + timedelta(days=14)).isoformat(),
-            "po_guard_cost_centre": f"{cc} - {ABBR}", "po_guard_status": "Pending Approval",
-            "po_guard_notes": "Seed history (synthetic).", "items": items})
+            "erp_guard_cost_centre": f"{cc} - {ABBR}", "erp_guard_status": "Pending Approval",
+            "erp_guard_notes": "Seed history (synthetic).", "items": items})
         r.raise_for_status()
         name = r.json()["data"]["name"]
         s = appr.put(f"/api/resource/Purchase Order/{name}", json={
-            "docstatus": 1, "po_guard_status": "Approved",
-            "po_guard_approver": "director@example.com"})
+            "docstatus": 1, "erp_guard_status": "Approved",
+            "erp_guard_approver": "director@example.com"})
         if s.status_code >= 400:
             raise RuntimeError(f"submitting {name}: {s.text[:800]}")
     print(f"history: {len(plan)} approved orders")

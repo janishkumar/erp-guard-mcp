@@ -6,8 +6,8 @@ import asyncio
 
 from conftest import as_user, po_args
 
-from po_guard import server
-from po_guard.connectors.base import ErpError
+from erp_guard import server
+from erp_guard.connectors.base import ErpError
 
 
 def _tools():

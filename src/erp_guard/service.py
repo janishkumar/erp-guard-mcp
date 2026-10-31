@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from po_guard import checks as C
-from po_guard.connectors.base import ErpConnector, ErpError
-from po_guard.models import (
+from erp_guard import checks as C
+from erp_guard.connectors.base import ErpConnector, ErpError
+from erp_guard.models import (
     LIVE_STATUSES,
     AuditRecord,
     Line,
@@ -20,7 +20,7 @@ from po_guard.models import (
     Snapshot,
     Status,
 )
-from po_guard.policy import Policy
+from erp_guard.policy import Policy
 
 _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I/L
 

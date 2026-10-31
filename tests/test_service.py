@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import pytest
 from conftest import DIR, MGR, REQ, REQ2, as_user, po_args, run
 
-from po_guard.models import Status
-from po_guard.service import CodeBook, InvalidArgs, canonical_args
+from erp_guard.models import Status
+from erp_guard.service import CodeBook, InvalidArgs, canonical_args
 
 
 def levels(results):

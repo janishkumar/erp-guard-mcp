@@ -1,4 +1,4 @@
-# po-guard policy. Amounts are in the company currency.
+# erp-guard policy. Amounts are in the company currency.
 
 [approval]
 # An order needs an approver whose tier limit covers its total. Ordered low to high.

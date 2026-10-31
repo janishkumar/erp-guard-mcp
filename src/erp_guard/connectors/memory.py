@@ -6,8 +6,8 @@ import dataclasses
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from po_guard.connectors.base import ErpError
-from po_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
+from erp_guard.connectors.base import ErpError
+from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 
 
 class MemoryErp:

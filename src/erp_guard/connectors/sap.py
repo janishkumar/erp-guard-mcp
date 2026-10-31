@@ -33,9 +33,9 @@ from pathlib import Path
 
 import httpx
 
-from po_guard.connectors.base import ErpError
-from po_guard.connectors.erpnext import HardLimitError, _walk_keys
-from po_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
+from erp_guard.connectors.base import ErpError
+from erp_guard.connectors.erpnext import HardLimitError, _walk_keys
+from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 
 SANDBOX = "https://sandbox.api.sap.com/s4hanacloud"
 PO_SERVICE = "/sap/opu/odata4/sap/api_purchaseorder_2/srvd_a2x/sap/purchaseorder/0001"
@@ -254,7 +254,7 @@ class SapS4:
 
     def approve_order(self, order_id):
         raise ErpError("Approval in S/4HANA runs through flexible workflow (My Inbox), not "
-                       "API_PURCHASEORDER_2; po-guard's SAP connector doesn't approve.")
+                       "API_PURCHASEORDER_2; erp-guard's SAP connector doesn't approve.")
 
     def _patch_item(self, order_id: str, item: dict, changes: dict) -> None:
         keys = f"{_key(order_id)},{_key(item['PurchaseOrderItem'])}"

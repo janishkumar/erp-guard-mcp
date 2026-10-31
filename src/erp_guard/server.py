@@ -8,14 +8,14 @@ import os
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
-from po_guard import render
-from po_guard.connectors.base import ErpError
-from po_guard.env import load_env
-from po_guard.policy import load_policy
-from po_guard.service import InvalidArgs, Service
+from erp_guard import render
+from erp_guard.connectors.base import ErpError
+from erp_guard.env import load_env
+from erp_guard.policy import load_policy
+from erp_guard.service import InvalidArgs, Service
 
 mcp = MCPServer(
-    "po-guard",
+    "erp-guard",
     instructions=(
         "Procure-to-pay in an ERP: suppliers, purchase orders, approvals. Every write is two "
         "steps: call `preview` with the write tool's name and exact arguments, show the user "
@@ -35,14 +35,14 @@ CANCEL = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent
 
 
 def make_connector():
-    kind = os.environ.get("PO_GUARD_ERP", "erpnext").lower()
+    kind = os.environ.get("ERP_GUARD_ERP", "erpnext").lower()
     if kind == "erpnext":
-        from po_guard.connectors.erpnext import ErpNext
+        from erp_guard.connectors.erpnext import ErpNext
         return ErpNext.from_env()
     if kind == "sap":
-        from po_guard.connectors.sap import SapS4
+        from erp_guard.connectors.sap import SapS4
         return SapS4.from_env()
-    raise SystemExit(f"PO_GUARD_ERP must be 'erpnext' or 'sap', not {kind!r}")
+    raise SystemExit(f"ERP_GUARD_ERP must be 'erpnext' or 'sap', not {kind!r}")
 
 
 _service: Service | None = None
@@ -144,7 +144,7 @@ def budget_status(cost_centre: str) -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def audit_log(target: str | None = None, limit: int = 20) -> str:
-    """Recent po-guard audit records (every write attempt, including refused ones).
+    """Recent erp-guard audit records (every write attempt, including refused ones).
 
     Args:
         target: Optional document ID (purchase order or supplier) to filter on.

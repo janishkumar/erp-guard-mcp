@@ -9,12 +9,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from po_guard.connectors.base import ErpError
-from po_guard.connectors.erpnext import HardLimitError
-from po_guard.connectors.sap import BP_SERVICE, PO_SERVICE, ODataClient, SapS4
-from po_guard.models import Line, Status
-from po_guard.policy import load_policy
-from po_guard.service import Service
+from erp_guard.connectors.base import ErpError
+from erp_guard.connectors.erpnext import HardLimitError
+from erp_guard.connectors.sap import BP_SERVICE, PO_SERVICE, ODataClient, SapS4
+from erp_guard.models import Line, Status
+from erp_guard.policy import load_policy
+from erp_guard.service import Service
 
 FIX = Path(__file__).parent / "fixtures" / "sap"
 

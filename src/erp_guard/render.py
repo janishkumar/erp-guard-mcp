@@ -6,8 +6,8 @@ from decimal import Decimal
 
 from rapidfuzz import fuzz, process
 
-from po_guard.matching import normalise_name
-from po_guard.models import LIVE_STATUSES, AuditRecord, PurchaseOrder, Supplier
+from erp_guard.matching import normalise_name
+from erp_guard.models import LIVE_STATUSES, AuditRecord, PurchaseOrder, Supplier
 
 _ICON = {"pass": "PASS", "warn": "WARN", "block": "BLOCK"}
 

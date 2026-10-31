@@ -26,7 +26,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from po_guard.matching import is_org, match_supplier_name, normalise_name  # noqa: E402
+from erp_guard.matching import is_org, match_supplier_name, normalise_name  # noqa: E402
 
 DEFAULT_SRC = (Path(__file__).resolve().parents[2]
                / "spend-leakage-finder/data/processed/name_map.parquet")

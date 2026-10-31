@@ -9,7 +9,7 @@ from enum import StrEnum
 
 
 class Status(StrEnum):
-    """po-guard's view of an order's lifecycle, mapped onto each ERP's own states."""
+    """erp-guard's view of an order's lifecycle, mapped onto each ERP's own states."""
 
     DRAFT = "Draft"
     PENDING = "Pending Approval"

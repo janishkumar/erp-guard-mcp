@@ -12,11 +12,11 @@ import uuid
 import httpx
 import pytest
 
-from po_guard.connectors.erpnext import ErpNext, HardLimitError
-from po_guard.env import load_env
-from po_guard.models import Status
-from po_guard.policy import load_policy
-from po_guard.service import Service
+from erp_guard.connectors.erpnext import ErpNext, HardLimitError
+from erp_guard.env import load_env
+from erp_guard.models import Status
+from erp_guard.policy import load_policy
+from erp_guard.service import Service
 
 load_env()
 URL = os.environ.get("ERPNEXT_URL", "http://localhost:8080")

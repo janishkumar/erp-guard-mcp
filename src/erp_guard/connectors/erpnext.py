@@ -16,10 +16,10 @@ from urllib.parse import quote
 
 import httpx
 
-from po_guard.connectors.base import ErpError
-from po_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
+from erp_guard.connectors.base import ErpError
+from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 
-AUDIT_DOCTYPE = "PO Guard Audit"
+AUDIT_DOCTYPE = "ERP Guard Audit"
 
 RESOURCES = frozenset({"Supplier", "Purchase Order", "Item", "Cost Center", AUDIT_DOCTYPE})
 METHODS = frozenset({"frappe.auth.get_logged_user", "frappe.client.cancel",
@@ -28,7 +28,7 @@ HTTP_VERBS = frozenset({"GET", "POST", "PUT"})
 _BANK_KEY = re.compile(r"bank|iban|swift|bic|routing|account_no|payment", re.IGNORECASE)
 
 _SUPPLIER_FIELDS = ["name", "supplier_name", "tax_id", "disabled", "on_hold",
-                    "po_guard_onboarded_by", "po_guard_notes"]
+                    "erp_guard_onboarded_by", "erp_guard_notes"]
 
 
 class HardLimitError(ErpError):
@@ -131,7 +131,7 @@ def _order_from_doc(d: dict) -> PurchaseOrder:
     elif d.get("docstatus") == 2:
         status = Status.CANCELLED
     else:
-        status = _STATUS.get(d.get("po_guard_status") or "Draft", Status.DRAFT)
+        status = _STATUS.get(d.get("erp_guard_status") or "Draft", Status.DRAFT)
     lines = tuple(
         Line(i["item_code"], Decimal(str(i["qty"])), Decimal(str(i["rate"])),
              i.get("description") or "")
@@ -139,10 +139,10 @@ def _order_from_doc(d: dict) -> PurchaseOrder:
     )
     return PurchaseOrder(
         id=d["name"], supplier_id=d["supplier"],
-        cost_centre=d.get("po_guard_cost_centre") or "",
+        cost_centre=d.get("erp_guard_cost_centre") or "",
         requester=d["owner"], status=status,
         order_date=date.fromisoformat(str(d["transaction_date"])[:10]), lines=lines,
-        notes=d.get("po_guard_notes") or "", approver=d.get("po_guard_approver") or None,
+        notes=d.get("erp_guard_notes") or "", approver=d.get("erp_guard_approver") or None,
     )
 
 
@@ -175,7 +175,7 @@ class ErpNext:
     def _supplier(d: dict) -> Supplier:
         return Supplier(d["name"], d.get("supplier_name") or d["name"], d.get("tax_id") or None,
                         bool(d.get("disabled")), bool(d.get("on_hold")),
-                        d.get("po_guard_onboarded_by") or None, d.get("po_guard_notes") or "")
+                        d.get("erp_guard_onboarded_by") or None, d.get("erp_guard_notes") or "")
 
     def list_suppliers(self) -> list[Supplier]:
         return [self._supplier(d) for d in self.c.get_list("Supplier", _SUPPLIER_FIELDS)]
@@ -193,13 +193,13 @@ class ErpNext:
         if supplier_id:
             filters.append(["supplier", "=", supplier_id])
         if cost_centre:
-            filters.append(["po_guard_cost_centre", "=", cost_centre])
+            filters.append(["erp_guard_cost_centre", "=", cost_centre])
         if since:
             filters.append(["transaction_date", ">=", since.isoformat()])
         heads = self.c.get_list(
             "Purchase Order",
-            ["name", "supplier", "po_guard_cost_centre", "owner", "docstatus",
-             "po_guard_status", "transaction_date", "po_guard_approver", "po_guard_notes"],
+            ["name", "supplier", "erp_guard_cost_centre", "owner", "docstatus",
+             "erp_guard_status", "transaction_date", "erp_guard_approver", "erp_guard_notes"],
             filters, order_by="transaction_date desc")
         if not heads:
             return []
@@ -222,7 +222,7 @@ class ErpNext:
         d = self.c.get_doc("Cost Center", cost_centre)
         if not d:
             return None
-        return CostCentre(d["name"], Decimal(str(d.get("po_guard_annual_budget") or 0)))
+        return CostCentre(d["name"], Decimal(str(d.get("erp_guard_annual_budget") or 0)))
 
     def item_codes(self) -> set[str]:
         return {d["name"] for d in self.c.get_list("Item", ["name"], [["disabled", "=", 0]])}
@@ -250,8 +250,8 @@ class ErpNext:
     # writes ----------------------------------------------------------------------------
     def create_supplier(self, name, tax_id, notes, onboarded_by):
         body = {"supplier_name": name, "supplier_group": self.supplier_group,
-                "supplier_type": "Company", "po_guard_onboarded_by": onboarded_by,
-                "po_guard_notes": notes}
+                "supplier_type": "Company", "erp_guard_onboarded_by": onboarded_by,
+                "erp_guard_notes": notes}
         if tax_id:
             body["tax_id"] = tax_id
         return self._supplier(self.c.request("POST", _res("Supplier"), body=body)["data"])
@@ -266,8 +266,8 @@ class ErpNext:
         body = {"supplier": supplier_id, "company": self.company,
                 "transaction_date": date.today().isoformat(),
                 "schedule_date": required_by.isoformat(),
-                "po_guard_cost_centre": cost_centre, "po_guard_status": Status.DRAFT.value,
-                "po_guard_notes": notes, "items": self._items(lines, cost_centre, required_by)}
+                "erp_guard_cost_centre": cost_centre, "erp_guard_status": Status.DRAFT.value,
+                "erp_guard_notes": notes, "items": self._items(lines, cost_centre, required_by)}
         return _order_from_doc(self.c.request("POST", _res("Purchase Order"), body=body)["data"])
 
     def _put(self, order_id: str, body: dict) -> PurchaseOrder:
@@ -275,13 +275,13 @@ class ErpNext:
         return _order_from_doc(d)
 
     def set_status(self, order_id, status, reason):
-        return self._put(order_id, {"po_guard_status": status.value,
-                                    "po_guard_reason": reason or ""})
+        return self._put(order_id, {"erp_guard_status": status.value,
+                                    "erp_guard_reason": reason or ""})
 
     def approve_order(self, order_id):
         user = self.whoami()
-        return self._put(order_id, {"po_guard_status": Status.APPROVED.value,
-                                    "po_guard_approver": user, "docstatus": 1})
+        return self._put(order_id, {"erp_guard_status": Status.APPROVED.value,
+                                    "erp_guard_approver": user, "docstatus": 1})
 
     def cancel_order(self, order_id, reason):
         current = self.c.get_doc("Purchase Order", order_id)
@@ -291,8 +291,8 @@ class ErpNext:
             self.c.request("POST", "/api/method/frappe.client.cancel",
                            body={"doctype": "Purchase Order", "name": order_id})
             return self.get_order(order_id)
-        return self._put(order_id, {"po_guard_status": Status.CANCELLED.value,
-                                    "po_guard_reason": reason})
+        return self._put(order_id, {"erp_guard_status": Status.CANCELLED.value,
+                                    "erp_guard_reason": reason})
 
     def amend_order(self, order_id, lines, notes):
         current = self.c.get_doc("Purchase Order", order_id)
@@ -300,8 +300,8 @@ class ErpNext:
             raise ErpError(f"No purchase order {order_id}")
         schedule = date.fromisoformat(str(current["schedule_date"])[:10])
         return self._put(order_id, {
-            "items": self._items(lines, current.get("po_guard_cost_centre") or "", schedule),
-            "po_guard_notes": notes, "po_guard_status": Status.DRAFT.value})
+            "items": self._items(lines, current.get("erp_guard_cost_centre") or "", schedule),
+            "erp_guard_notes": notes, "erp_guard_status": Status.DRAFT.value})
 
     def write_audit(self, record):
         body = {"action": record.action, "actor": record.actor, "outcome": record.outcome,

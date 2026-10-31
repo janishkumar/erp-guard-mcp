@@ -44,7 +44,7 @@ class Policy:
 
 
 def _default_path() -> Path:
-    env = os.environ.get("PO_GUARD_POLICY")
+    env = os.environ.get("ERP_GUARD_POLICY")
     if env:
         return Path(env)
     repo = Path(__file__).resolve().parents[2] / "config" / "policy.toml"

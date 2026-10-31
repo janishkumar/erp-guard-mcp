@@ -11,9 +11,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from decimal import Decimal
 
-from po_guard.matching import match_supplier_name
-from po_guard.models import LIVE_STATUSES, PurchaseOrder, Snapshot, Status, Supplier
-from po_guard.policy import Policy
+from erp_guard.matching import match_supplier_name
+from erp_guard.models import LIVE_STATUSES, PurchaseOrder, Snapshot, Status, Supplier
+from erp_guard.policy import Policy
 
 PASS, WARN, BLOCK = "pass", "warn", "block"
 
@@ -254,7 +254,7 @@ def free_text(texts: dict[str, str]) -> list[CheckResult]:
     if bank:
         out.append(CheckResult(
             "no_bank_details", BLOCK,
-            f"Bank-account details in {', '.join(bank)}. po-guard never writes bank details; "
+            f"Bank-account details in {', '.join(bank)}. erp-guard never writes bank details; "
             "they go through the ERP's own verified vendor-banking process.",
         ))
     else:

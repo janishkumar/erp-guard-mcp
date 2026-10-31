@@ -16,8 +16,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from test_live_erpnext import _up
 
-from po_guard.connectors.erpnext import ErpNext
-from po_guard.env import load_env
+from erp_guard.connectors.erpnext import ErpNext
+from erp_guard.env import load_env
 
 pytestmark = [pytest.mark.live, pytest.mark.skipif(not _up(), reason="local ERPNext not up")]
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,10 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def params(tag: str) -> StdioServerParameters:
     load_env(ROOT / ".env")
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "PO_GUARD_ERP": "erpnext",
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "ERP_GUARD_ERP": "erpnext",
            "ERPNEXT_API_KEY": os.environ[f"ERPNEXT_KEY_{tag}"],
            "ERPNEXT_API_SECRET": os.environ[f"ERPNEXT_SECRET_{tag}"]}
-    return StdioServerParameters(command=sys.executable, args=["-m", "po_guard.server"],
+    return StdioServerParameters(command=sys.executable, args=["-m", "erp_guard.server"],
                                  env=env, cwd=str(ROOT))
 
 

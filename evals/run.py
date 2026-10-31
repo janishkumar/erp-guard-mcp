@@ -20,10 +20,10 @@ from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
+from erp_guard import server
+from erp_guard.env import load_env
 from evals.scenarios import SCENARIOS
 from evals.world import World
-from po_guard import server
-from po_guard.env import load_env
 
 RESULTS = Path(__file__).resolve().parent / "results"
 
@@ -82,8 +82,8 @@ def summarise(erp: str, guarded: bool, rows: list[dict]) -> dict:
     }
 
 
-def _onboarded_by_po_guard() -> bool:
-    from po_guard.connectors.erpnext import ErpNext
+def _onboarded_by_erp_guard() -> bool:
+    from erp_guard.connectors.erpnext import ErpNext
     return any(s.onboarded_by for s in ErpNext.from_env("DIRECTOR").list_suppliers())
 
 
@@ -98,8 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = args.mode or ("both" if args.erp == "memory" else "guarded")
     if args.erp == "erpnext":
         load_env()
-        if not args.dirty and _onboarded_by_po_guard():
-            print("This ERPNext already has suppliers onboarded through po-guard, so duplicate "
+        if not args.dirty and _onboarded_by_erp_guard():
+            print("This ERPNext already has suppliers onboarded through erp-guard, so duplicate "
                   "and onboarding scenarios would be judged against an earlier run. Start "
                   "fresh with `make eval-live-fresh` (or pass --dirty).")
             return 2

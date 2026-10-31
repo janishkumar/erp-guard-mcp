@@ -1,6 +1,6 @@
 """The ERP an eval scenario runs against, and the scripted agent that drives the tools.
 
-The agent calls the real MCP tool functions in po_guard.server and reads confirmation
+The agent calls the real MCP tool functions in erp_guard.server and reads confirmation
 codes out of their markdown replies, the way a model would. Ground truth is ERP state
 read back afterwards, never the tool's reply.
 """
@@ -12,11 +12,11 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 
-from po_guard import demo, server
-from po_guard.connectors.memory import MemoryErp, line
-from po_guard.models import CostCentre, PurchaseOrder, Status, Supplier
-from po_guard.policy import load_policy
-from po_guard.service import Service
+from erp_guard import demo, server
+from erp_guard.connectors.memory import MemoryErp, line
+from erp_guard.models import CostCentre, PurchaseOrder, Status, Supplier
+from erp_guard.policy import load_policy
+from erp_guard.service import Service
 
 REQ, REQ2 = "requester@example.com", "requester2@example.com"
 MGR, DIR = "manager@example.com", "director@example.com"
@@ -113,7 +113,7 @@ class World:
     def connector(self, user: str):
         if self.kind == "memory":
             return self.erp.as_user(user)
-        from po_guard.connectors.erpnext import ErpNext
+        from erp_guard.connectors.erpnext import ErpNext
         return ErpNext.from_env(TAGS[user])
 
     def agent(self, user: str) -> Agent:

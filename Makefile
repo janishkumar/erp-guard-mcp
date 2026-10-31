@@ -13,7 +13,7 @@ lint:
 	uv run ruff check src tests scripts evals
 
 test:            ## unit tests + fast eval (in-memory ERP, no network)
-	uv run pytest -m "not live" --cov=po_guard --cov-report=term-missing
+	uv run pytest -m "not live" --cov=erp_guard --cov-report=term-missing
 
 test-live:       ## integration tests against the local ERPNext (make up && make seed first)
 	uv run pytest -m live -v
@@ -38,7 +38,7 @@ seed-file:       ## rebuild data/seed/suppliers.csv from spend-leakage-finder's 
 	uv run --extra seed python scripts/build_seed.py
 
 serve:           ## run the MCP server on stdio as the requester (ERPNext)
-	uv run po-guard-mcp
+	uv run erp-guard-mcp
 
 eval:            ## guardrail eval on the in-memory ERP (what CI runs)
 	uv run python -m evals.run --erp memory

@@ -10,7 +10,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Protocol
 
-from po_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
+from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 
 
 class ErpError(Exception):

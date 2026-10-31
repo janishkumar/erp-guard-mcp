@@ -9,10 +9,10 @@ import json
 import httpx
 import pytest
 
-from po_guard import server
-from po_guard.connectors import base
-from po_guard.connectors.erpnext import ErpNext, FrappeClient, HardLimitError
-from po_guard.connectors.memory import MemoryErp
+from erp_guard import server
+from erp_guard.connectors import base
+from erp_guard.connectors.erpnext import ErpNext, FrappeClient, HardLimitError
+from erp_guard.connectors.memory import MemoryErp
 
 FORBIDDEN = ("pay", "bank", "delete", "remove", "iban", "transfer")
 

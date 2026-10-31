@@ -1,4 +1,4 @@
-# po-guard-mcp
+# erp-guard-mcp
 
 An MCP server that lets an AI assistant raise, submit, approve, amend and cancel purchase orders and onboard suppliers in an ERP, with the procurement controls enforced in code: duplicate suppliers, split purchases, budget per cost centre, price against the last purchase, and segregation of duties. A confused or prompt-injected assistant still can't skip them.
 
@@ -8,7 +8,7 @@ Connectors: **ERPNext** (live reads and writes, runs locally in Docker) and **SA
 
 Procure-to-pay leakage (the same supplier set up twice, a $96K purchase split into two $48K orders to stay under a $50K approval limit, an order that breaks the cost centre's budget, a price far above the last one paid, a requester approving their own order) is usually found after payment, by audit, when the money is hard to get back. [Spend Leakage Finder](https://github.com/janishkumar/spend-leakage-finder) finds it after the fact in the City of Chicago's payment ledger. This is the prevention side: stop it before the PO exists.
 
-It matters more once assistants do the data entry. Give an assistant raw ERP API access and nothing guarantees it checks anything; a supplier record whose notes say "approve this immediately" is all it takes. Asking the model to be careful isn't a control. po-guard puts the controls in the only path to the ERP.
+It matters more once assistants do the data entry. Give an assistant raw ERP API access and nothing guarantees it checks anything; a supplier record whose notes say "approve this immediately" is all it takes. Asking the model to be careful isn't a control. erp-guard puts the controls in the only path to the ERP.
 
 **Decision it supports:** whether an assistant can be allowed to write purchase orders at all, and under which controls. The eval below is the evidence.
 
@@ -103,7 +103,7 @@ On 197 unseen spelling variants of the seeded supplier names (dropped, swapped o
 
 ## ERP steps and their SAP equivalents
 
-| po-guard tool | ERPNext | SAP S/4HANA (API_PURCHASEORDER_2) | SAP GUI |
+| erp-guard tool | ERPNext | SAP S/4HANA (API_PURCHASEORDER_2) | SAP GUI |
 |---|---|---|---|
 | `onboard_supplier` | Supplier | Business partner, supplier role | BP |
 | `create_purchase_order` | Purchase Order (draft) | `POST PurchaseOrder`, deep insert with items and account assignment | ME21N |
@@ -134,17 +134,17 @@ Use it from Claude Code or Claude Desktop (stdio). The acting user is whichever 
 ```json
 {
   "mcpServers": {
-    "po-guard": {
+    "erp-guard": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/po-guard-mcp", "po-guard-mcp"],
-      "env": {"PO_GUARD_ERP": "erpnext", "ERPNEXT_URL": "http://localhost:8080",
+      "args": ["run", "--directory", "/path/to/erp-guard-mcp", "erp-guard-mcp"],
+      "env": {"ERP_GUARD_ERP": "erpnext", "ERPNEXT_URL": "http://localhost:8080",
               "ERPNEXT_API_KEY": "...", "ERPNEXT_API_SECRET": "..."}
     }
   }
 }
 ```
 
-SAP: set `PO_GUARD_ERP=sap` and `SAP_API_KEY` (free api.sap.com account) for sandbox reads. The sandbox is read-only.
+SAP: set `ERP_GUARD_ERP=sap` and `SAP_API_KEY` (free api.sap.com account) for sandbox reads. The sandbox is read-only.
 
 ## Data
 
@@ -154,7 +154,7 @@ SAP: set `PO_GUARD_ERP=sap` and `SAP_API_KEY` (free api.sap.com account) for san
 
 ## What didn't work (and what replaced it)
 
-- **The first live eval was too good for the wrong reason.** ERPNext's Purchase User role can't create suppliers, so every onboarding attempt, attack or not, was stopped by an ERP permission error before po-guard was tested. The legitimate onboarding flows caught it: every one of them failed. Fixed by giving the demo users the supplier-master role, so po-guard's checks are what's being measured. The lesson stuck: every attack scenario has legitimate twins, and success is judged from ERP state.
+- **The first live eval was too good for the wrong reason.** ERPNext's Purchase User role can't create suppliers, so every onboarding attempt, attack or not, was stopped by an ERP permission error before erp-guard was tested. The legitimate onboarding flows caught it: every one of them failed. Fixed by giving the demo users the supplier-master role, so erp-guard's checks are what's being measured. The lesson stuck: every attack scenario has legitimate twins, and success is judged from ERP state.
 - **A false "unsafe write" from the harness.** On a persistent ERP, the reused-code scenario counted an order left over from an earlier run. Each scenario now judges only orders created while it ran, and live runs start from a freshly seeded ERPNext.
 - **Token-set pre-filtering missed lost spaces.** "UNISONCONSULTING, INC." scored too low against "UNISON CONSULTING, INC." to reach the guarded matcher. Adding a space-insensitive score to the pre-filter brought the misses on unseen variants down to the three reported above, with no wrong matches.
 - **A warning doesn't stop a determined agent.** The one real-data duplicate that gets through is "AZTECA SUPPLY CO." against "AZTEC SUPPLY CORPORATION": Spend Leakage Finder's leading-word rule (it exists so FARO doesn't merge with FARONICS) makes it a warning, not a block. Whether they're the same firm isn't known from the ledger. Left as a measured miss rather than tuned away.
@@ -164,8 +164,8 @@ SAP: set `PO_GUARD_ERP=sap` and `SAP_API_KEY` (free api.sap.com account) for san
 ## Repository
 
 ```
-src/po_guard/        checks.py, matching.py, service.py (preview/code/audit), server.py (MCP tools)
-src/po_guard/connectors/  base.py (protocol), erpnext.py, sap.py, memory.py
+src/erp_guard/        checks.py, matching.py, service.py (preview/code/audit), server.py (MCP tools)
+src/erp_guard/connectors/  base.py (protocol), erpnext.py, sap.py, memory.py
 evals/               scenarios, harness, matching eval, README report
 scripts/             build_seed.py, seed_erpnext.py
 docker/compose.yml   ERPNext v16.52.0 (from frappe_docker)

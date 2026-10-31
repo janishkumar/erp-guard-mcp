@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from po_guard import demo
-from po_guard.matching import match_supplier_name, normalise_name
+from erp_guard import demo
+from erp_guard.matching import match_supplier_name, normalise_name
 
 M = [("S1", "HERC RENTALS INC"), ("S2", "GRANITE CONSTRUCTION COMPANY."),
      ("S3", "LOCAL 150 OPERATING ENGINEERS"), ("S4", "UNISON CONSULTING, INC."),

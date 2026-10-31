@@ -161,26 +161,51 @@ def test_doc_methods_only_the_allowlisted_ones():
 BANK = "Demo Operating Bank - LDU"
 
 
-@pytest.mark.parametrize("path,body", [
-    ("/api/resource/Payment Entry", {"payment_type": "Pay", "paid_from": "Petty Cash - LDU"}),
-    ("/api/resource/Payment Entry", {"bank_account": "Other Bank - LDU"}),
-    ("/api/resource/Payment Entry", {"paid_from": BANK, "party_bank_account": "SUP-1 - Chase"}),
+@pytest.mark.parametrize("path,body,refused", [
+    ("/api/resource/Payment Entry", {"payment_type": "Pay", "paid_from": "Petty Cash - LDU"},
+     "['paid_from']"),
+    ("/api/resource/Payment Entry", {"bank_account": "Other Bank - LDU"}, "['bank_account']"),
+    ("/api/resource/Payment Entry", {"paid_from": BANK, "party_bank_account": "SUP-1 - Chase"},
+     "['party_bank_account']"),
     ("/api/method/frappe.client.insert", {"doc": {"doctype": "Payment Entry",
-                                                  "paid_from": "Petty Cash - LDU"}}),
+                                                  "paid_from": "Petty Cash - LDU"}},
+     "['paid_from']"),
     ("/api/method/frappe.client.save", {"doc": {"doctype": "Payment Entry", "paid_from": BANK,
-                                                "bank_account_no": "123456789"}}),
+                                                "bank_account_no": "123456789"}},
+     "['bank_account_no']"),
     # the bank account is only allowed on a payment entry, nowhere else
-    ("/api/resource/Supplier", {"supplier_name": "x", "default_bank_account": BANK}),
+    ("/api/resource/Supplier", {"supplier_name": "x", "default_bank_account": BANK},
+     "['default_bank_account']"),
     ("/api/method/frappe.client.insert", {"doc": {"doctype": "Task", "subject": "x",
-                                                  "bank_account": BANK}}),
-    # ERPNext writes the path's doctype, so a body claiming another can't dodge the rule
-    ("/api/resource/Payment Entry", {"doctype": "Task", "paid_from": "Petty Cash - LDU"}),
+                                                  "bank_account": BANK}}, "['bank_account']"),
 ])
-def test_bank_details_refused_except_the_policy_account(path, body):
+def test_bank_details_refused_except_the_policy_account(path, body, refused):
     seen = []
     c = _client(seen, writable=lambda d: True, allowed_bank_values={BANK})
-    with pytest.raises(HardLimitError, match="bank|body doctype"):
+    with pytest.raises(HardLimitError) as exc:
         c.request("POST", path, body=body)
+    assert str(exc.value) == f"bank details are never written: {refused}"
+    assert not seen
+
+
+@pytest.mark.parametrize("falsy", [None, ""])
+def test_bank_check_keeps_path_doctype_when_body_doctype_falsy(falsy):
+    c = _client([], allowed_bank_values={BANK})
+    with pytest.raises(HardLimitError) as exc:
+        c._check_bank({"doctype": falsy, "paid_from": "Other Bank - LDU"}, "Payment Entry")
+    assert str(exc.value) == "bank details are never written: ['paid_from']"
+
+
+# ERPNext writes the path's doctype whatever the body says, so a body naming any other
+# doctype (None and "" included) could dodge the payment entry rule; it's refused.
+@pytest.mark.parametrize("claimed", ["Task", None, ""])
+def test_resource_body_doctype_other_than_path_refused(claimed):
+    seen = []
+    c = _client(seen, writable=lambda d: True, allowed_bank_values={BANK})
+    with pytest.raises(HardLimitError) as exc:
+        c.request("POST", "/api/resource/Payment Entry",
+                  body={"doctype": claimed, "paid_from": "Other Bank - LDU"})
+    assert str(exc.value) == f"body doctype {claimed!r} != path Payment Entry"
     assert not seen
 
 
@@ -201,7 +226,7 @@ def test_resource_body_doctype_must_match_path():
     seen = []
     c = _client(seen, writable=lambda d: True, allowed_bank_values={BANK})
     for verb in ("POST", "PUT"):
-        with pytest.raises(HardLimitError, match="body doctype"):
+        with pytest.raises(HardLimitError, match="body doctype 'Task' != path Payment Entry"):
             c.request(verb, "/api/resource/Payment Entry/PE-1", body={"doctype": "Task"})
     assert not seen
     c.request("POST", "/api/resource/Payment Entry", body={"doctype": "Payment Entry",

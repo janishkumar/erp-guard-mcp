@@ -97,7 +97,7 @@ def _walk_keys(obj):
 def _fields(obj, doctype: str | None = None):
     """Yield (doctype of the enclosing document, key, value) for every key in a body."""
     if isinstance(obj, dict):
-        dt = obj.get("doctype", doctype)
+        dt = obj.get("doctype") or doctype  # a falsy doctype never replaces the context
         for k, v in obj.items():
             yield dt, str(k), v
             yield from _fields(v)
@@ -172,8 +172,8 @@ class FrappeClient:
         if kind == "resource":
             doctype = name
             # ERPNext writes the path's doctype whatever the body says; so must the checks.
-            if isinstance(body, dict) and body.get("doctype") not in (None, name):
-                raise HardLimitError(f"body doctype {body.get('doctype')} != path {name}")
+            if isinstance(body, dict) and "doctype" in body and body["doctype"] != name:
+                raise HardLimitError(f"body doctype {body['doctype']!r} != path {name}")
             if verb == "GET":
                 if name not in RESOURCES and not self.writable(name):
                     raise HardLimitError(f"doctype not allowed: {name}")

@@ -1,8 +1,9 @@
 """ERPNext connector: talks to ERPNext over its REST API (token auth, one API key per ERP user).
 
-The HTTP layer only speaks to an allowlist of doctypes and methods, and never sends
-DELETE. That's a second wall behind the connector protocol: even a bug in this module
-can't reach payments, bank accounts or deletion.
+The HTTP layer is a second wall behind the service's checks: it never sends DELETE, only
+calls allowlisted methods, writes only document types the `writable` predicate allows
+(the scope rules), and never writes bank details. Even a bug in this module can't delete,
+administer the system or redirect a payment.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Callable, Iterable
 from datetime import date
 from decimal import Decimal
 from urllib.parse import quote
@@ -18,14 +20,61 @@ import httpx
 
 from erp_guard.connectors.base import ErpError
 from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
+from erp_guard.policy import Policy, load_policy
 
 AUDIT_DOCTYPE = "ERP Guard Audit"
 
+# v1's document types: read through /api/resource, and the default writable set.
 RESOURCES = frozenset({"Supplier", "Purchase Order", "Item", "Cost Center", AUDIT_DOCTYPE})
-METHODS = frozenset({"frappe.auth.get_logged_user", "frappe.client.cancel",
-                     "frappe.client.get_list"})
+
+_BUY = "erpnext.buying.doctype"
+_STOCK = "erpnext.stock.doctype"
+_ACC = "erpnext.accounts.doctype"
+# (source doctype, target doctype) -> ERPNext's mapper. Mappers return an unsaved draft.
+MAPPERS: dict[tuple[str, str], str] = {
+    ("Material Request", "Purchase Order"):
+        f"{_STOCK}.material_request.material_request.make_purchase_order",
+    ("Material Request", "Request for Quotation"):
+        f"{_STOCK}.material_request.material_request.make_request_for_quotation",
+    ("Request for Quotation", "Supplier Quotation"):
+        f"{_BUY}.request_for_quotation.request_for_quotation.make_supplier_quotation_from_rfq",
+    ("Supplier Quotation", "Purchase Order"):
+        f"{_BUY}.supplier_quotation.supplier_quotation.make_purchase_order",
+    ("Purchase Order", "Purchase Receipt"):
+        f"{_BUY}.purchase_order.purchase_order.make_purchase_receipt",
+    ("Purchase Order", "Purchase Invoice"):
+        f"{_BUY}.purchase_order.purchase_order.make_purchase_invoice",
+    ("Purchase Receipt", "Purchase Invoice"):
+        f"{_STOCK}.purchase_receipt.purchase_receipt.make_purchase_invoice",
+    ("Purchase Receipt", "Purchase Receipt"):
+        f"{_STOCK}.purchase_receipt.purchase_receipt.make_purchase_return",
+    ("Purchase Invoice", "Purchase Invoice"):
+        f"{_ACC}.purchase_invoice.purchase_invoice.make_debit_note",
+    ("Purchase Invoice", "Payment Entry"):
+        f"{_ACC}.payment_entry.payment_entry.get_payment_entry",
+}
+PO_UPDATE_STATUS = f"{_BUY}.purchase_order.purchase_order.update_status"
+RUN_DOC_METHOD = "frappe.handler.run_doc_method"
+# Controller methods reachable through run_doc_method: (doctype, method). In v16 hold and
+# release are methods on the Purchase Invoice controller, not module functions.
+DOC_METHODS = frozenset({("Purchase Invoice", "block_invoice"),
+                         ("Purchase Invoice", "unblock_invoice")})
+
+GET_ONLY_METHODS = frozenset({"frappe.desk.form.load.getdoctype"})
+READ_METHODS = frozenset({"frappe.auth.get_logged_user", "frappe.client.get_list",
+                          "frappe.client.get", "frappe.model.workflow.get_transitions",
+                          *MAPPERS.values()})
+# Write methods (POST only), and where each names the document type it writes.
+WRITE_METHODS = {
+    "frappe.client.insert": "doc", "frappe.client.save": "doc", "frappe.client.submit": "doc",
+    "frappe.model.workflow.apply_workflow": "doc", "frappe.client.cancel": "doctype",
+    RUN_DOC_METHOD: "dt", PO_UPDATE_STATUS: "Purchase Order",
+}
+METHODS = GET_ONLY_METHODS | READ_METHODS | frozenset(WRITE_METHODS)
 HTTP_VERBS = frozenset({"GET", "POST", "PUT"})
-_BANK_KEY = re.compile(r"bank|iban|swift|bic|routing|account_no|payment", re.IGNORECASE)
+_BANK_KEY = re.compile(r"bank|iban|swift|bic|routing|account_no", re.IGNORECASE)
+# Set by our code on a Payment Entry, and then only to the policy's bank account.
+_PAYMENT_BANK_KEYS = frozenset({"paid_from", "bank_account"})
 
 _SUPPLIER_FIELDS = ["name", "supplier_name", "tax_id", "disabled", "on_hold",
                     "erp_guard_onboarded_by", "erp_guard_notes"]
@@ -45,14 +94,67 @@ def _walk_keys(obj):
             yield from _walk_keys(v)
 
 
+def _fields(obj, doctype: str | None = None):
+    """Yield (doctype of the enclosing document, key, value) for every key in a body."""
+    if isinstance(obj, dict):
+        dt = obj.get("doctype", doctype)
+        for k, v in obj.items():
+            yield dt, str(k), v
+            yield from _fields(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _fields(v)
+
+
 class FrappeClient:
     def __init__(self, base_url: str, api_key: str, api_secret: str,
-                 transport: httpx.BaseTransport | None = None, timeout: float = 30.0):
+                 transport: httpx.BaseTransport | None = None, timeout: float = 30.0,
+                 writable: Callable[[str], bool] = lambda d: d in RESOURCES,
+                 allowed_bank_values: Iterable[str] = ()):
         self.http = httpx.Client(
             base_url=base_url.rstrip("/"), timeout=timeout, transport=transport,
             headers={"Authorization": f"token {api_key}:{api_secret}",
                      "Accept": "application/json"},
         )
+        self.writable = writable
+        self.allowed_bank_values = frozenset(allowed_bank_values)
+
+    def _require_writable(self, doctype) -> None:
+        if not isinstance(doctype, str) or not doctype or not self.writable(doctype):
+            raise HardLimitError(f"doctype not writable: {doctype}")
+
+    def _write_targets(self, method: str, body) -> list:
+        """The document types a write method touches, read from its arguments."""
+        where = WRITE_METHODS[method]
+        body = body if isinstance(body, dict) else {}
+        if where == "doctype":
+            return [body.get("doctype")]
+        if where == "dt":
+            if (body.get("dt"), body.get("method")) not in DOC_METHODS or not body.get("dn"):
+                raise HardLimitError(f"document method not allowed: {body.get('method')}")
+            if not isinstance(body.get("args"), dict | None):
+                raise HardLimitError("document method args must be an object")
+            return [body["dt"]]
+        if where == "doc":
+            doc = body.get("doc")
+            if not isinstance(doc, dict):
+                raise HardLimitError(f"{method} needs the document as an object")
+            # A child row inserted on its own is written into its parent.
+            return [doc.get("doctype")] + ([doc["parenttype"]] if doc.get("parenttype") else [])
+        return [where]
+
+    def _check_bank(self, body, doctype: str | None) -> None:
+        bad = set()
+        for dt, key, value in _fields(body, doctype):
+            if value is None or value == "":
+                continue
+            if dt == "Payment Entry" and key in _PAYMENT_BANK_KEYS:
+                if value not in self.allowed_bank_values:
+                    bad.add(key)
+            elif _BANK_KEY.search(key):
+                bad.add(key)
+        if bad:
+            raise HardLimitError(f"bank details are never written: {sorted(bad)}")
 
     def _guard(self, verb: str, path: str, body) -> None:
         if verb not in HTTP_VERBS:
@@ -62,17 +164,25 @@ class FrappeClient:
             raise HardLimitError(f"path not allowed: {path}")
         kind, name = m.group(1), httpx.URL("/" + m.group(2)).path[1:]
         name = name.replace("%20", " ")
-        if kind == "resource" and name not in RESOURCES:
-            raise HardLimitError(f"doctype not allowed: {name}")
-        if kind == "method" and name not in METHODS:
+        doctype = None
+        if kind == "resource":
+            doctype = name
+            if verb == "GET":
+                if name not in RESOURCES and not self.writable(name):
+                    raise HardLimitError(f"doctype not allowed: {name}")
+            else:
+                self._require_writable(name)
+        elif name not in METHODS:
             raise HardLimitError(f"method not allowed: {name}")
-        if kind == "method" and name == "frappe.client.cancel" and body \
-                and body.get("doctype") != "Purchase Order":
-            raise HardLimitError("only purchase orders can be cancelled")
+        elif name in GET_ONLY_METHODS and verb != "GET":
+            raise HardLimitError(f"{name} is read with GET only")
+        elif name in WRITE_METHODS:
+            if verb != "POST":
+                raise HardLimitError(f"{name} is sent with POST only")
+            for target in self._write_targets(name, body):
+                self._require_writable(target)
         if body is not None:
-            bad = sorted({k for k in _walk_keys(body) if _BANK_KEY.search(str(k))})
-            if bad:
-                raise HardLimitError(f"bank or payment fields are never written: {bad}")
+            self._check_bank(body, doctype)
 
     def request(self, verb: str, path: str, params: dict | None = None, body=None):
         self._guard(verb, path, body)
@@ -122,6 +232,25 @@ def _error_text(r: httpx.Response) -> str:
     return str(data.get("exception") or data.get("exc_type") or data)[:500]
 
 
+# Not carried into an amendment: identity, bookkeeping, and state ERPNext sets again.
+_NOT_AMENDED = frozenset({"name", "owner", "creation", "modified", "modified_by", "docstatus",
+                          "amended_from", "status", "workflow_state"})
+_NOT_COPIED_ROW = frozenset({"name", "owner", "creation", "modified", "modified_by",
+                             "docstatus", "parent", "parenttype", "parentfield"})
+
+
+def _copy(doc: dict, drop: frozenset[str]) -> dict:
+    """A document without `drop` and private (`_x`) keys; child rows lose their identity."""
+    out = {}
+    for k, v in doc.items():
+        if k in drop or k.startswith("_"):
+            continue
+        if isinstance(v, list) and v and all(isinstance(r, dict) for r in v):
+            v = [_copy(r, _NOT_COPIED_ROW) for r in v]
+        out[k] = v
+    return out
+
+
 _STATUS = {s.value: s for s in Status}
 
 
@@ -152,24 +281,117 @@ class ErpNext:
     def __init__(self, client: FrappeClient, company: str,
                  supplier_group: str = "Demo Suppliers"):
         self.c, self.company, self.supplier_group = client, company, supplier_group
+        self._meta: dict[str, dict] = {}
 
     @classmethod
-    def from_env(cls, user_tag: str | None = None) -> ErpNext:
+    def from_env(cls, user_tag: str | None = None, policy: Policy | None = None) -> ErpNext:
         """Credentials from the environment. `user_tag` (e.g. "MANAGER") picks the
-        per-user keys that `make seed` writes, instead of ERPNEXT_API_KEY/SECRET."""
+        per-user keys that `make seed` writes, instead of ERPNEXT_API_KEY/SECRET. The one
+        bank account payments may use comes from the policy."""
         kname, sname = (("ERPNEXT_API_KEY", "ERPNEXT_API_SECRET") if user_tag is None else
                         (f"ERPNEXT_KEY_{user_tag}", f"ERPNEXT_SECRET_{user_tag}"))
         missing = [k for k in (kname, sname) if not os.environ.get(k)]
         if missing:
             raise SystemExit(f"Set {', '.join(missing)} (make seed writes them to .env).")
+        policy = policy or load_policy()
         client = FrappeClient(os.environ.get("ERPNEXT_URL", "http://localhost:8080"),
-                              os.environ[kname], os.environ[sname])
+                              os.environ[kname], os.environ[sname],
+                              allowed_bank_values={policy.payment.bank_account})
         return cls(client, os.environ.get("ERPNEXT_COMPANY", "Lakeside Demo Utilities"),
                    os.environ.get("ERPNEXT_SUPPLIER_GROUP", "Demo Suppliers"))
 
     # reads -----------------------------------------------------------------------------
     def whoami(self) -> str:
         return self.c.request("GET", "/api/method/frappe.auth.get_logged_user")["message"]
+
+    # any document type -----------------------------------------------------------------
+    def call(self, method: str, /, **kwargs):
+        """An allowlisted method by its dotted path; returns its `message`. (`method` is
+        positional-only: run_doc_method takes a `method` argument of its own.)"""
+        path = f"/api/method/{method}"
+        if method in GET_ONLY_METHODS:
+            return self.c.request("GET", path, params=kwargs).get("message")
+        return self.c.request("POST", path, body=kwargs).get("message")
+
+    def get_meta(self, doctype: str) -> dict:
+        """The DocType document (fields, permissions, is_submittable, ...) with its child
+        tables' DocTypes under `child_doctypes`, by name."""
+        if doctype not in self._meta:
+            docs = self.c.request("GET", "/api/method/frappe.desk.form.load.getdoctype",
+                                  params={"doctype": doctype})["docs"]
+            main = next(d for d in docs if d["name"] == doctype)
+            self._meta[doctype] = {**main, "child_doctypes": {
+                d["name"]: d for d in docs if d["name"] != doctype}}
+        return self._meta[doctype]
+
+    def list_doctypes(self) -> list[dict]:
+        """Every DocType that isn't a child table."""
+        return self.find("DocType", [["istable", "=", 0]],
+                         ["name", "module", "issingle", "istable", "is_submittable"],
+                         "name asc", 0)
+
+    def get_doc(self, doctype: str, name: str) -> dict | None:
+        try:
+            return self.c.request("GET", "/api/method/frappe.client.get",
+                                  params={"doctype": doctype, "name": name})["message"]
+        except ErpError as exc:
+            if " 404 " in str(exc):
+                return None
+            raise
+
+    def find(self, doctype: str, filters: list | None = None, fields: list[str] | None = None,
+             order_by: str | None = None, limit: int = 20) -> list[dict]:
+        body = {"doctype": doctype, "fields": fields or ["name"], "filters": filters or [],
+                "order_by": order_by, "limit_page_length": limit}
+        return self.call("frappe.client.get_list", **body)
+
+    def map_doc(self, source_doctype: str, source_name: str, target_doctype: str) -> dict:
+        """ERPNext's own draft of `target_doctype` from a source document (unsaved)."""
+        method = MAPPERS.get((source_doctype, target_doctype))
+        if method is None:
+            raise HardLimitError(f"no mapper from {source_doctype} to {target_doctype}")
+        if target_doctype == "Payment Entry":
+            return self.call(method, dt=source_doctype, dn=source_name)
+        return self.call(method, source_name=source_name)
+
+    def insert(self, doc: dict) -> dict:
+        return self.call("frappe.client.insert", doc=doc)
+
+    def save(self, doc: dict) -> dict:
+        return self.call("frappe.client.save", doc=doc)
+
+    def _require(self, doctype: str, name: str) -> dict:
+        doc = self.get_doc(doctype, name)
+        if doc is None:
+            raise ErpError(f"No {doctype} {name}")
+        return doc
+
+    def submit(self, doctype: str, name: str) -> dict:
+        # frappe.client.submit saves the document it's given, so send the current one.
+        return self.call("frappe.client.submit", doc=self._require(doctype, name))
+
+    def cancel(self, doctype: str, name: str) -> dict:
+        return self.call("frappe.client.cancel", doctype=doctype, name=name)
+
+    def amend(self, doctype: str, name: str, fields: dict) -> dict:
+        """A new draft copied from a cancelled document, with `amended_from` set (ERPNext
+        names it <name>-1), and `fields` applied."""
+        src = self._require(doctype, name)
+        if src.get("docstatus") != 2:
+            raise ErpError(f"{doctype} {name} isn't cancelled; only cancelled documents "
+                           "can be amended")
+        doc = {**_copy(src, _NOT_AMENDED), "amended_from": name, **fields}
+        return self.insert(doc)
+
+    def apply_workflow(self, doctype: str, name: str, action: str) -> dict:
+        # ERPNext loads the document itself; only its identity is sent.
+        return self.call("frappe.model.workflow.apply_workflow",
+                         doc={"doctype": doctype, "name": name}, action=action)
+
+    def transitions(self, doctype: str, name: str) -> list[str]:
+        rows = self.call("frappe.model.workflow.get_transitions",
+                         doc={"doctype": doctype, "name": name})
+        return [t["action"] for t in rows or []]
 
     @staticmethod
     def _supplier(d: dict) -> Supplier:

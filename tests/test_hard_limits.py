@@ -173,11 +173,13 @@ BANK = "Demo Operating Bank - LDU"
     ("/api/resource/Supplier", {"supplier_name": "x", "default_bank_account": BANK}),
     ("/api/method/frappe.client.insert", {"doc": {"doctype": "Task", "subject": "x",
                                                   "bank_account": BANK}}),
+    # ERPNext writes the path's doctype, so a body claiming another can't dodge the rule
+    ("/api/resource/Payment Entry", {"doctype": "Task", "paid_from": "Petty Cash - LDU"}),
 ])
 def test_bank_details_refused_except_the_policy_account(path, body):
     seen = []
     c = _client(seen, writable=lambda d: True, allowed_bank_values={BANK})
-    with pytest.raises(HardLimitError, match="bank"):
+    with pytest.raises(HardLimitError, match="bank|body doctype"):
         c.request("POST", path, body=body)
     assert not seen
 
@@ -193,3 +195,31 @@ def test_policy_bank_account_and_empty_bank_fields_pass():
         "doctype": "Purchase Invoice", "cash_bank_account": None,
         "payment_schedule": [{"payment_term": None, "payment_amount": 100.0}]}})
     assert len(seen) == 2
+
+
+def test_resource_body_doctype_must_match_path():
+    seen = []
+    c = _client(seen, writable=lambda d: True, allowed_bank_values={BANK})
+    for verb in ("POST", "PUT"):
+        with pytest.raises(HardLimitError, match="body doctype"):
+            c.request(verb, "/api/resource/Payment Entry/PE-1", body={"doctype": "Task"})
+    assert not seen
+    c.request("POST", "/api/resource/Payment Entry", body={"doctype": "Payment Entry",
+                                                          "paid_from": BANK})
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize("verb,path,params", [
+    ("PUT", "/api/resource/Supplier/ACME", {"default_bank_account": "x"}),
+    ("POST", "/api/resource/Payment Entry", {"paid_from": "Petty Cash - LDU"}),
+    ("POST", "/api/method/frappe.client.insert",
+     {"doc": json.dumps({"doctype": "User", "email": "x@example.com"})}),
+    ("POST", "/api/method/frappe.client.cancel", {"doctype": "Payment Request", "name": "x"}),
+])
+def test_write_arguments_in_query_string_refused(verb, path, params):
+    seen = []
+    c = _client(seen, writable=lambda d: d != "User" and d != "Payment Request",
+                allowed_bank_values={BANK})
+    with pytest.raises(HardLimitError, match="body only"):
+        c.request(verb, path, params=params)
+    assert not seen

@@ -156,9 +156,13 @@ class FrappeClient:
         if bad:
             raise HardLimitError(f"bank details are never written: {sorted(bad)}")
 
-    def _guard(self, verb: str, path: str, body) -> None:
+    def _guard(self, verb: str, path: str, body, params: dict | None = None) -> None:
         if verb not in HTTP_VERBS:
             raise HardLimitError(f"{verb} is never sent")
+        if verb != "GET" and params:
+            # ERPNext reads the query string as arguments when there's no JSON body, and
+            # the checks below only inspect the body.
+            raise HardLimitError(f"{verb} carries its arguments in the body only")
         m = re.fullmatch(r"/api/(resource|method)/([^/?]+)(/[^?]*)?", path)
         if not m:
             raise HardLimitError(f"path not allowed: {path}")
@@ -167,6 +171,9 @@ class FrappeClient:
         doctype = None
         if kind == "resource":
             doctype = name
+            # ERPNext writes the path's doctype whatever the body says; so must the checks.
+            if isinstance(body, dict) and body.get("doctype") not in (None, name):
+                raise HardLimitError(f"body doctype {body.get('doctype')} != path {name}")
             if verb == "GET":
                 if name not in RESOURCES and not self.writable(name):
                     raise HardLimitError(f"doctype not allowed: {name}")
@@ -185,7 +192,7 @@ class FrappeClient:
             self._check_bank(body, doctype)
 
     def request(self, verb: str, path: str, params: dict | None = None, body=None):
-        self._guard(verb, path, body)
+        self._guard(verb, path, body, params)
         try:
             r = self.http.request(verb, path, params=params,
                                   json=body if body is not None else None)

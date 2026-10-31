@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from po_guard import checks as C
-from po_guard.adapters.base import ErpAdapter, ErpError
+from po_guard.connectors.base import ErpConnector, ErpError
 from po_guard.models import (
     LIVE_STATUSES,
     AuditRecord,
@@ -74,8 +74,8 @@ def _lines(args: dict) -> list[dict]:
             raise InvalidArgs(f"line {i + 1} has unknown field(s): {', '.join(sorted(unknown))}")
         out.append({
             "item_code": _text(ln, "item_code", required=True, max_len=140),
-            "qty": str(_decimal(ln.get("qty"), "qty")),
-            "rate": str(_decimal(ln.get("rate"), "rate")),
+            "qty": format(_decimal(ln.get("qty"), "qty"), "f"),
+            "rate": format(_decimal(ln.get("rate"), "rate"), "f"),
             "description": _text(ln, "description", max_len=500),
         })
     return out
@@ -201,7 +201,7 @@ class Outcome:
 # --- the service ---------------------------------------------------------------------
 
 class Service:
-    def __init__(self, erp: ErpAdapter, policy: Policy,
+    def __init__(self, erp: ErpConnector, policy: Policy,
                  today: Callable[[], date] = date.today,
                  now: Callable[[], datetime] = datetime.now):
         self.erp, self.policy, self.today = erp, policy, today

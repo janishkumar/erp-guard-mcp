@@ -1,6 +1,6 @@
 """The controls. Pure functions: proposed action + ERP snapshot + policy -> results.
 
-None of these touch the ERP. The service gathers a Snapshot through the adapter and
+None of these touch the ERP. The service gathers a Snapshot through the connector and
 passes it in, so each check is unit-testable and identical across ERPs.
 """
 
@@ -152,7 +152,7 @@ def price_vs_last(order: PurchaseOrder, last_prices: dict[str, Decimal],
         if not last:
             continue
         pct = (ln.rate - last) / last * 100
-        evidence[ln.item_code] = {"rate": str(ln.rate), "last": str(last),
+        evidence[ln.item_code] = {"rate": f"{ln.rate:f}", "last": f"{last:f}",
                                   "pct": str(round(pct, 1))}
         if pct > policy.price_block_pct:
             worst_level = BLOCK

@@ -9,7 +9,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from po_guard import render
-from po_guard.adapters.base import ErpError
+from po_guard.connectors.base import ErpError
+from po_guard.env import load_env
 from po_guard.policy import load_policy
 from po_guard.service import InvalidArgs, Service
 
@@ -33,13 +34,13 @@ CANCEL = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent
                          open_world_hint=False)
 
 
-def make_adapter():
+def make_connector():
     kind = os.environ.get("PO_GUARD_ERP", "erpnext").lower()
     if kind == "erpnext":
-        from po_guard.adapters.erpnext import ErpNext
+        from po_guard.connectors.erpnext import ErpNext
         return ErpNext.from_env()
     if kind == "sap":
-        from po_guard.adapters.sap import SapS4
+        from po_guard.connectors.sap import SapS4
         return SapS4.from_env()
     raise SystemExit(f"PO_GUARD_ERP must be 'erpnext' or 'sap', not {kind!r}")
 
@@ -50,7 +51,7 @@ _service: Service | None = None
 def service() -> Service:
     global _service
     if _service is None:
-        _service = Service(make_adapter(), load_policy())
+        _service = Service(make_connector(), load_policy())
     return _service
 
 
@@ -262,6 +263,7 @@ def amend_purchase_order(po: str, lines: list[dict], notes: str | None = None,
 
 def main() -> None:
     logging.basicConfig(level=logging.WARNING)
+    load_env()  # a local .env, if any; real environment variables win
     mcp.run()
 
 

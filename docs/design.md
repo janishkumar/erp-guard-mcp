@@ -14,12 +14,12 @@ AI assistants are starting to do procure-to-pay work directly in ERPs. An assist
 1. MCP tools for the core P2P writes: create a purchase order, onboard a supplier, submit for approval, approve or reject, cancel, amend. Plus read tools: supplier search, PO lookup, budget status, a read-only preview, and the audit log.
 2. Every write follows preview → one-time confirmation code → write → audit record. The audit record lives inside the ERP.
 3. Checks enforced in code on every write: duplicate supplier, split purchase, budget per cost centre, price vs last purchase, segregation of duties.
-4. ERP-neutral guardrail core; each ERP is an adapter.
+4. ERP-neutral guardrail core; each ERP plugs in through a connector.
 5. A guardrail eval suite of attack scenarios with a measured count of unsafe writes that reached the ERP.
 
 ## Non-goals
 
-- Never writes payments, bank-account details or deletions. There is no tool, adapter method or HTTP path for them (see "Hard limits").
+- Never writes payments, bank-account details or deletions. There is no tool, connector method or HTTP path for them (see "Hard limits").
 - No goods receipts (MIGO) or invoice posting (MIRO) in v1.
 - Not a replacement for ERP-side authorisation. It adds controls in front of the API; ERP roles still apply.
 - No real SAP tenant, no SAP CAL, nothing that touches a university SAP system.
@@ -38,13 +38,13 @@ po_guard.service       preview / commit orchestration, confirmation codes, audit
    │   po_guard.matching vendor-name normalisation + guarded fuzzy match (from Spend Leakage Finder)
    │   po_guard.policy   approval tiers, tolerances, windows (config/policy.toml)
    ▼
-po_guard.adapters.base   ErpAdapter protocol: reads + a small fixed set of writes
+po_guard.connectors.base   ErpConnector protocol: reads + a small fixed set of writes
    ├── erpnext.py        ERPNext REST API (live, Docker on localhost)
    ├── sap.py            SAP S/4HANA Cloud OData (reads live from api.sap.com sandbox; writes fixture-tested)
    └── memory.py         in-memory ERP for unit tests and the fast eval run
 ```
 
-The checks never call the ERP themselves. The service gathers what they need through the adapter (supplier master, open POs for a supplier, cost-centre budget and commitments, last purchase price), then runs pure check functions. That keeps every check unit-testable and identical across ERPs.
+The checks never call the ERP themselves. The service gathers what they need through the connector (supplier master, open POs for a supplier, cost-centre budget and commitments, last purchase price), then runs pure check functions. That keeps every check unit-testable and identical across ERPs.
 
 ## The write protocol
 
@@ -59,7 +59,7 @@ What the code does and doesn't prove: it proves the write matches a preview whos
 
 ## Identity
 
-The acting user is fixed by the server's configuration (the ERP API key it runs with), never a tool argument. The adapter confirms it with the ERP at start-up. A requester's session therefore can't approve "as" someone else, whatever the model is told.
+The acting user is fixed by the server's configuration (the ERP API key it runs with), never a tool argument. The connector confirms it with the ERP at start-up. A requester's session therefore can't approve "as" someone else, whatever the model is told.
 
 ## Checks
 
@@ -84,7 +84,7 @@ Policy lives in `config/policy.toml`: approval tiers (manager to $50,000, direct
 
 ## Hard limits
 
-- The adapter protocol has no methods for payments, bank details or deletion.
+- The connector protocol has no methods for payments, bank details or deletion.
 - The ERPNext HTTP client refuses DELETE, and refuses any doctype outside an allowlist (`Purchase Order`, `Supplier`, `Item`, `Cost Center`, `PO Guard Audit`, plus read-only lookups). Bank-related fields (`Bank Account`, IBAN, routing numbers) are stripped from supplier payloads and rejected if present.
 - Tests assert all three, so a later change that adds such a path fails CI.
 
@@ -102,13 +102,13 @@ Policy lives in `config/policy.toml`: approval tiers (manager to $50,000, direct
 
 Goods receipt (MIGO), invoice (MIRO) and payment run (F110) are out of scope; the last is out of scope permanently.
 
-## Adapters
+## Connectors
 
 **ERPNext** (open source, GPL) runs locally in Docker from frappe_docker's single-file compose, image pinned to `v16.52.0`, bound to `127.0.0.1:8080`. `make up` starts it; `make seed` completes the setup wizard and loads the demo company, users and API keys (written to a gitignored `.env`); `make down` stops it. Live reads and writes through the REST API.
 
-**SAP S/4HANA Cloud.** The free api.sap.com sandbox is read-only and needs an API key from a free SAP account. Reads (suppliers, purchase orders) run live when `SAP_API_KEY` is set. Writes are built against SAP's current V4 purchase-order API (`API_PURCHASEORDER_2`; the V2 `API_PURCHASEORDER_PROCESS_SRV` is deprecated): CSRF-token fetch, deep insert of header and items, ETag on update. They are tested against fixtures and labelled "not run against a live tenant". Until a key exists, read fixtures are built from SAP's published API schema, not recorded; they get replaced by recorded sandbox responses once a key is available. The SAP adapter has no custom audit table to write to in the sandbox, so its audit records go to a local JSONL file, labelled as such.
+**SAP S/4HANA Cloud.** The free api.sap.com sandbox is read-only and needs an API key from a free SAP account. Reads (suppliers, purchase orders) run live when `SAP_API_KEY` is set. Writes are built against SAP's current V4 purchase-order API (`API_PURCHASEORDER_2`; the V2 `API_PURCHASEORDER_PROCESS_SRV` is deprecated): CSRF-token fetch, deep insert of header and items, ETag on update. They are tested against fixtures and labelled "not run against a live tenant". Until a key exists, read fixtures are built from SAP's published API schema, not recorded; they get replaced by recorded sandbox responses once a key is available. The SAP connector has no custom audit table to write to in the sandbox, so its audit records go to a local JSONL file, labelled as such.
 
-**Memory** adapter: same protocol, in-process, for unit tests and the CI eval run.
+**Memory** connector: same protocol, in-process, for unit tests and the CI eval run.
 
 ## Demo data
 
@@ -123,11 +123,11 @@ Goods receipt (MIGO), invoice (MIRO) and payment run (F110) are out of scope; th
 
 Scenarios (first set): prompt injection in supplier notes instructing approval; writing with no code; writing with a code from a different preview; editing the order after preview; reusing a code; a $96K order split into two $48K orders; self-approval; approving above one's limit; a duplicate supplier under a real variant spelling; duplicate by tax ID; raising a PO to a supplier one just onboarded; over-budget order; price at 3x the last purchase; bank details in onboarding; approving an already-rejected order. Plus legitimate control flows that must succeed, so a guard that blocks everything scores badly.
 
-Reported: unsafe writes that landed with po-guard, the same scenarios through a naive adapter with no guardrails (the baseline), and legitimate flows completed. The fast run uses the memory adapter in CI; `make eval-live` runs the same scenarios against ERPNext, and the README reports the live run.
+Reported: unsafe writes that landed with po-guard, the same scenarios through a naive connector with no guardrails (the baseline), and legitimate flows completed. The fast run uses the memory connector in CI; `make eval-live` runs the same scenarios against ERPNext, and the README reports the live run.
 
 ## Testing and CI
 
-- pytest: checks (pure), matching, confirmation codes, service orchestration on the memory adapter, ERPNext client allowlist, SAP adapter against fixtures, MCP tool registration. Coverage gate 80%.
+- pytest: checks (pure), matching, confirmation codes, service orchestration on the memory connector, ERPNext client allowlist, SAP connector against fixtures, MCP tool registration. Coverage gate 80%.
 - `make test-live`: integration tests against the running ERPNext, skipped when it isn't up.
 - GitHub Actions: ruff, pytest with coverage gate across Python 3.11 to 3.13, fast eval run (fails the build if any unsafe write lands), pip-audit, gitleaks, wheel build check.
 

@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from po_guard.adapters.memory import MemoryErp, line
+from po_guard.connectors.memory import MemoryErp, line
 from po_guard.models import CostCentre, PurchaseOrder, Status, Supplier
 from po_guard.policy import load_policy
 from po_guard.service import Service

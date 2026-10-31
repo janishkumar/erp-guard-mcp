@@ -1,4 +1,4 @@
-"""ERP-neutral records the checks and adapters share."""
+"""ERP-neutral records the checks and connectors share."""
 
 from __future__ import annotations
 

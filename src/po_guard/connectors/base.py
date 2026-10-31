@@ -1,4 +1,4 @@
-"""The ERP adapter protocol.
+"""The ERP connector protocol.
 
 Deliberately small. There is no method for payments, bank details or deleting anything,
 so no tool can reach one; tests/test_hard_limits.py keeps it that way.
@@ -17,7 +17,7 @@ class ErpError(Exception):
     """The ERP refused or failed a request."""
 
 
-class ErpAdapter(Protocol):
+class ErpConnector(Protocol):
     name: str
 
     # reads

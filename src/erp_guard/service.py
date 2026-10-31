@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import secrets
 from collections.abc import Callable
@@ -12,23 +13,13 @@ from decimal import Decimal, InvalidOperation
 
 from erp_guard import checks as C
 from erp_guard.connectors.base import ErpConnector, ErpError
-from erp_guard.models import (
-    LIVE_STATUSES,
-    AuditRecord,
-    Line,
-    PurchaseOrder,
-    Snapshot,
-    Status,
-)
+from erp_guard.models import AuditRecord
 from erp_guard.policy import Policy
 
 _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I/L
 
-WRITE_ACTIONS = (
-    "create_purchase_order", "onboard_supplier", "submit_for_approval",
-    "approve_purchase_order", "reject_purchase_order", "cancel_purchase_order",
-    "amend_purchase_order",
-)
+# Modules whose ACTIONS list joins the default registry. A new pack module adds itself here.
+_ACTION_MODULES = ("erp_guard.packs.p2p.orders",)
 
 
 class InvalidArgs(ValueError):
@@ -81,50 +72,25 @@ def _lines(args: dict) -> list[dict]:
     return out
 
 
-_FIELDS: dict[str, dict[str, Callable]] = {
-    "create_purchase_order": {
-        "supplier": lambda a: _text(a, "supplier", required=True, max_len=140),
-        "cost_centre": lambda a: _text(a, "cost_centre", required=True, max_len=140),
-        "lines": _lines,
-        "required_by": lambda a: _text(a, "required_by", max_len=10),
-        "notes": lambda a: _text(a, "notes"),
-    },
-    "onboard_supplier": {
-        "name": lambda a: _text(a, "name", required=True, max_len=140),
-        "tax_id": lambda a: _text(a, "tax_id", max_len=40),
-        "notes": lambda a: _text(a, "notes"),
-    },
-    "submit_for_approval": {"po": lambda a: _text(a, "po", required=True, max_len=140)},
-    "approve_purchase_order": {
-        "po": lambda a: _text(a, "po", required=True, max_len=140),
-        "comment": lambda a: _text(a, "comment"),
-    },
-    "reject_purchase_order": {
-        "po": lambda a: _text(a, "po", required=True, max_len=140),
-        "reason": lambda a: _text(a, "reason", required=True),
-    },
-    "cancel_purchase_order": {
-        "po": lambda a: _text(a, "po", required=True, max_len=140),
-        "reason": lambda a: _text(a, "reason", required=True),
-    },
-    "amend_purchase_order": {
-        "po": lambda a: _text(a, "po", required=True, max_len=140),
-        "lines": _lines,
-        "notes": lambda a: _text(a, "notes"),
-    },
-}
+def canonicaliser(action: str, spec: dict[str, Callable[[dict], object]]
+                  ) -> Callable[[dict], dict]:
+    """Canonicalise args field by field; any argument not in `spec` is refused."""
+    def canonicalise(args: dict) -> dict:
+        unknown = set(args) - set(spec) - {"confirmation_code"}
+        if unknown:
+            raise InvalidArgs(f"Unknown argument(s) for {action}: {', '.join(sorted(unknown))}")
+        return {k: fn(args) for k, fn in spec.items()}
+    return canonicalise
 
 
-def canonical_args(action: str, args: dict) -> dict:
-    if action not in _FIELDS:
-        raise InvalidArgs(f"Unknown action '{action}'. One of: {', '.join(WRITE_ACTIONS)}")
+def canonical_args(action: str, args: dict, actions: dict[str, Action] | None = None) -> dict:
+    if actions is None:
+        actions = {a.name: a for a in default_actions()}
+    if action not in actions:
+        raise InvalidArgs(f"Unknown action '{action}'. One of: {', '.join(actions)}")
     if not isinstance(args, dict):
         raise InvalidArgs("args must be an object")
-    spec = _FIELDS[action]
-    unknown = set(args) - set(spec) - {"confirmation_code"}
-    if unknown:
-        raise InvalidArgs(f"Unknown argument(s) for {action}: {', '.join(sorted(unknown))}")
-    return {k: fn(args) for k, fn in spec.items()}
+    return actions[action].canonicalise(args)
 
 
 def payload_hash(action: str, actor: str, canon: dict) -> str:
@@ -198,6 +164,33 @@ class Outcome:
     audit_id: str | None = None
 
 
+# --- actions -------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Action:
+    """One write the service can preview and execute."""
+
+    name: str
+    canonicalise: Callable[[dict], dict]
+    evaluate: Callable[[Service, dict], tuple[str, list[C.CheckResult]]]  # reads only
+    write: Callable[[Service, dict], tuple[str, str]]  # (target id, message)
+    target_key: str | None = None  # canon key naming the target doc
+
+
+def default_actions() -> list[Action]:
+    """Every action of every pack. Imported lazily: action modules import this one."""
+    out: list[Action] = []
+    for mod in _ACTION_MODULES:
+        out += importlib.import_module(mod).ACTIONS
+    return out
+
+
+def __getattr__(name: str):
+    if name == "WRITE_ACTIONS":
+        return tuple(a.name for a in default_actions())
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 # --- the service ---------------------------------------------------------------------
 
 class Service:
@@ -207,6 +200,14 @@ class Service:
         self.erp, self.policy, self.today = erp, policy, today
         self.codes = CodeBook(timedelta(minutes=policy.code_ttl_minutes), now)
         self._actor: str | None = None
+        self.actions: dict[str, Action] = {}
+        self.register(*default_actions())
+
+    def register(self, *actions: Action) -> None:
+        for a in actions:
+            if a.name in self.actions:
+                raise ValueError(f"Action '{a.name}' is already registered")
+            self.actions[a.name] = a
 
     @property
     def actor(self) -> str:
@@ -215,123 +216,18 @@ class Service:
             self._actor = self.erp.whoami()
         return self._actor
 
-    # snapshot + checks per action -----------------------------------------------------
-
     def fy_start(self) -> date:
         t, m = self.today(), self.policy.fy_start_month
         return date(t.year if t.month >= m else t.year - 1, m, 1)
 
-    def _proposed(self, canon: dict, base: PurchaseOrder | None = None) -> PurchaseOrder:
-        lines = tuple(Line(ln["item_code"], Decimal(ln["qty"]), Decimal(ln["rate"]),
-                           ln["description"]) for ln in canon["lines"])
-        if base is not None:
-            return PurchaseOrder(base.id, base.supplier_id, base.cost_centre, base.requester,
-                                 base.status, base.order_date, lines, canon.get("notes", ""))
-        return PurchaseOrder("(new)", canon["supplier"], canon["cost_centre"], self.actor,
-                             Status.DRAFT, self.today(), lines, canon.get("notes", ""))
-
-    def _order_checks(self, order: PurchaseOrder, with_prices: bool) -> list[C.CheckResult]:
-        """Split, budget and (for new lines) price, against fresh ERP data."""
-        today = self.today()
-        since = min(today - timedelta(days=self.policy.split_window_days), self.fy_start())
-        cc_orders = self.erp.list_orders(cost_centre=order.cost_centre, since=since)
-        snap = Snapshot(actor=self.actor, today=today,
-                        cost_centre=self.erp.get_cost_centre(order.cost_centre))
-        snap.committed = sum(
-            (o.total for o in cc_orders
-             if o.id != order.id and o.status in LIVE_STATUSES
-             and o.order_date >= self.fy_start()),
-            Decimal(0),
-        )
-        out = [C.split_purchase(order, cc_orders, self.policy, today), C.budget(order, snap)]
-        if with_prices:
-            out.insert(0, C.items_known(order, self.erp.item_codes()))
-            prices = self.erp.last_purchase_prices(sorted({ln.item_code for ln in order.lines}))
-            out.append(C.price_vs_last(order, prices, self.policy))
-        return out
-
-    def _texts(self, canon: dict) -> dict[str, str]:
-        texts = {k: canon[k] for k in ("notes", "name", "reason", "comment") if canon.get(k)}
-        for i, ln in enumerate(canon.get("lines", [])):
-            if ln["description"]:
-                texts[f"line {i + 1} description"] = ln["description"]
-        return texts
-
     def evaluate(self, action: str, canon: dict) -> tuple[str, list[C.CheckResult]]:
         """(human summary, check results) for a proposed write. Reads only."""
-        actor = self.actor
-        if action == "onboard_supplier":
-            res = [C.duplicate_supplier(canon["name"], canon["tax_id"] or None,
-                                        self.erp.list_suppliers(), self.policy)]
-            res += C.free_text(self._texts(canon))
-            tid = f", tax ID {canon['tax_id']}" if canon["tax_id"] else ""
-            return f"Create supplier '{canon['name']}'{tid}, onboarded by {actor}.", res
-
-        if action == "create_purchase_order":
-            order = self._proposed(canon)
-            sup = self.erp.get_supplier(order.supplier_id)
-            res = [C.supplier_usable(sup, order.supplier_id),
-                   C.self_dealing(actor, sup, "requester")]
-            res += self._order_checks(order, with_prices=True)
-            res += C.free_text(self._texts(canon))
-            name = sup.name if sup else order.supplier_id
-            return (f"Create draft PO to {name} ({order.supplier_id}) on cost centre "
-                    f"{order.cost_centre}: {_describe_lines(order)}; total "
-                    f"${order.total:,.2f}, needs {self.policy.required_tier(order.total).name} "
-                    f"approval. Requester: {actor}."), res
-
-        order = self.erp.get_order(canon["po"])
-        ref = canon["po"]
-        if action == "submit_for_approval":
-            res = [C.state(order, ref, {Status.DRAFT, Status.REJECTED}, "submitting")]
-            if order is not None:
-                res += self._order_checks(order, with_prices=False)
-            return f"Submit {ref} for approval.", res
-
-        if action in ("approve_purchase_order", "reject_purchase_order"):
-            verb = "approve" if action == "approve_purchase_order" else "reject"
-            res = [C.state(order, ref, {Status.PENDING},
-                           "approval" if verb == "approve" else "rejection")]
-            if order is not None:
-                res.append(C.segregation_of_duties(actor, order))
-                if verb == "approve":
-                    res.append(C.approval_authority(actor, order, self.policy))
-                    res.append(C.self_dealing(actor, self.erp.get_supplier(order.supplier_id),
-                                              "approver"))
-                    res += self._order_checks(order, with_prices=False)
-            res += C.free_text(self._texts(canon))
-            total = f" (${order.total:,.2f})" if order else ""
-            return f"{verb.capitalize()} {ref}{total} as {actor}.", res
-
-        if action == "cancel_purchase_order":
-            res = [C.state(order, ref, LIVE_STATUSES | {Status.REJECTED}, "cancelling")]
-            if order is not None and order.requester != actor and \
-                    self.policy.approver_limit(actor) is None:
-                res.append(C.CheckResult("ownership", C.BLOCK,
-                                         f"Only the requester or an approver can cancel {ref}."))
-            res += C.free_text(self._texts(canon))
-            return f"Cancel {ref}. Nothing is deleted; the order stays on record.", res
-
-        if action == "amend_purchase_order":
-            res = [C.state(order, ref, {Status.DRAFT, Status.PENDING, Status.REJECTED},
-                           "amending")]
-            if order is not None:
-                if order.requester != actor:
-                    res.append(C.CheckResult("ownership", C.BLOCK,
-                                             f"Only the requester can amend {ref}."))
-                new = self._proposed(canon, base=order)
-                res += self._order_checks(new, with_prices=True)
-                res += C.free_text(self._texts(canon))
-                return (f"Amend {ref}: {_describe_lines(new)}; total ${new.total:,.2f} (was "
-                        f"${order.total:,.2f}). Goes back to Draft and needs resubmitting."), res
-            return f"Amend {ref}.", res
-
-        raise InvalidArgs(f"Unknown action '{action}'")
+        return self.actions[action].evaluate(self, canon)
 
     # public API -----------------------------------------------------------------------
 
     def preview(self, action: str, args: dict) -> Preview:
-        canon = canonical_args(action, args)
+        canon = canonical_args(action, args, self.actions)
         summary, results = self.evaluate(action, canon)
         code = None
         if not C.blocked(results):
@@ -341,12 +237,14 @@ class Service:
     def execute(self, action: str, args: dict, confirmation_code: str | None) -> Outcome:
         actor = self.actor
         try:
-            canon = canonical_args(action, args)
+            canon = canonical_args(action, args, self.actions)
         except InvalidArgs as exc:
-            po = args.get("po") if isinstance(args, dict) else None
-            return self._audit(Outcome(action, "refused", str(exc)), actor, "", po)
+            key = a.target_key if (a := self.actions.get(action)) else None
+            ref = args.get(key) if key and isinstance(args, dict) else None
+            return self._audit(Outcome(action, "refused", str(exc)), actor, "", ref)
         digest = payload_hash(action, actor, canon)
-        target = canon.get("po")
+        key = self.actions[action].target_key
+        target = canon.get(key) if key else None
 
         why = self.codes.redeem(confirmation_code, action, actor, digest)
         if why:
@@ -366,36 +264,7 @@ class Service:
         return self._audit(Outcome(action, "written", msg, results, target), actor, digest)
 
     def _write(self, action: str, canon: dict) -> tuple[str, str]:
-        erp = self.erp
-        if action == "onboard_supplier":
-            s = erp.create_supplier(canon["name"], canon["tax_id"] or None, canon["notes"],
-                                    self.actor)
-            return s.id, f"Supplier {s.name} created as {s.id}."
-        if action == "create_purchase_order":
-            order = self._proposed(canon)
-            req = date.fromisoformat(canon["required_by"]) if canon["required_by"] \
-                else self.today() + timedelta(days=14)
-            po = erp.create_order(order.supplier_id, order.cost_centre, list(order.lines),
-                                  canon["notes"], req)
-            return po.id, f"Draft purchase order {po.id} created (${po.total:,.2f})."
-        po_id = canon["po"]
-        if action == "submit_for_approval":
-            erp.set_status(po_id, Status.PENDING, "")
-            return po_id, f"{po_id} submitted for approval."
-        if action == "approve_purchase_order":
-            erp.approve_order(po_id)
-            return po_id, f"{po_id} approved."
-        if action == "reject_purchase_order":
-            erp.set_status(po_id, Status.REJECTED, canon["reason"])
-            return po_id, f"{po_id} rejected."
-        if action == "cancel_purchase_order":
-            erp.cancel_order(po_id, canon["reason"])
-            return po_id, f"{po_id} cancelled."
-        if action == "amend_purchase_order":
-            order = self._proposed(canon, base=erp.get_order(po_id))
-            erp.amend_order(po_id, list(order.lines), canon["notes"])
-            return po_id, f"{po_id} amended and back in Draft."
-        raise InvalidArgs(action)
+        return self.actions[action].write(self, canon)
 
     def _audit(self, out: Outcome, actor: str, digest: str, target: str | None = None) -> Outcome:
         rec = AuditRecord(action=out.action, actor=actor, outcome=out.outcome,
@@ -408,6 +277,3 @@ class Service:
             out.message += f" WARNING: audit record could not be written ({exc})."
         return out
 
-
-def _describe_lines(order: PurchaseOrder) -> str:
-    return ", ".join(f"{ln.qty} x {ln.item_code} @ ${ln.rate:,.2f}" for ln in order.lines)

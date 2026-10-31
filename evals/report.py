@@ -66,6 +66,12 @@ def eval_section() -> str:
     if missed:
         lines += ["", "What got through with po-guard:", ""]
         lines += [f"- `{r['name']}`: {r['what']}" for r in missed]
+    if n:
+        held = [r for r in n["scenarios"] if r["kind"] == "attack" and not r["result"]]
+        if held:
+            who = "ERPNext's own validation or the tool schema" if live_g else "the tool schema"
+            lines += ["", f"Without guardrails, {who} still stopped {len(held)}: "
+                          + "; ".join(f"`{r['name']}`" for r in held) + "."]
     if live_g and mem_g:
         lines += ["", f"The in-memory run CI does on every push: "
                       f"{mem_g['unsafe_writes_landed']} / {mem_g['attacks']} landed, "
@@ -88,14 +94,20 @@ def matching_section() -> str:
 def roi_section() -> str:
     g = _load("erpnext-guarded.live.json") or _load("memory-guarded.json")
     stop = 1 - g["unsafe_writes_landed"] / g["attacks"]
-    lines = [f"Illustrative, for ${ANNUAL_PO_SPEND / 1e6:.0f}M of annual PO spend. The leakage "
-             "rate is an assumption, not a measurement; the stop rate is the eval's "
-             f"({stop:.1%} of attack scenarios stopped). Software cost is $0.", "",
-             "| Leakage of the kinds checked (% of PO value) | Leakage $ / year | "
-             "Stopped before the PO exists |", "|---:|---:|---:|"]
+    shares = [0.25, 0.5, 1.0]
+    lines = [
+        f"Illustrative, for ${ANNUAL_PO_SPEND / 1e6:.0f}M of annual PO spend. Two assumptions "
+        "drive it: how much PO value is leakage of the kinds po-guard checks, and how much of "
+        "the PO volume is raised through po-guard. The only measured input is the eval's stop "
+        f"rate ({stop:.1%} of attack scenarios), and real leakage is messier than the "
+        "scenarios, so read each cell as an upper bound. Software cost is $0.", "",
+        "| Leakage (% of PO value) | " + " | ".join(
+            f"{s_:.0%} of POs through po-guard" for s_ in shares) + " |",
+        "|---:|" + "---:|" * len(shares)]
     for r in LEAKAGE_RATES:
-        loss = ANNUAL_PO_SPEND * r
-        lines.append(f"| {r:.2%} | ${loss:,.0f} | ${loss * stop:,.0f} |")
+        cells = [f"${ANNUAL_PO_SPEND * r * s_ * stop:,.0f}" for s_ in shares]
+        lines.append(f"| {r:.2%} | " + " | ".join(cells) + " |")
+    lines += ["", "Cells are leakage stopped before the PO exists, per year."]
     return "\n".join(lines)
 
 

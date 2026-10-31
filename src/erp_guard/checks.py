@@ -231,6 +231,9 @@ _INSTRUCTION = re.compile(
     re.IGNORECASE,
 )
 _IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b")
+# Field names that hold bank details. `payment` is deliberately absent: payment_type and
+# payment_schedule are ordinary fields.
+BANK_KEY = re.compile(r"bank|iban|swift|bic|routing|account_no", re.IGNORECASE)
 _BANK_WORDS = re.compile(
     r"\b(routing|aba|swift|bic|sort code|iban|bank account|account (number|no\.?|#))\b",
     re.IGNORECASE,

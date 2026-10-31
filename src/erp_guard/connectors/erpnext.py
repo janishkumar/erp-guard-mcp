@@ -18,6 +18,7 @@ from urllib.parse import quote
 
 import httpx
 
+from erp_guard.checks import BANK_KEY as _BANK_KEY
 from erp_guard.connectors.base import ErpError
 from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 from erp_guard.policy import Policy, load_policy
@@ -72,7 +73,6 @@ WRITE_METHODS = {
 }
 METHODS = GET_ONLY_METHODS | READ_METHODS | frozenset(WRITE_METHODS)
 HTTP_VERBS = frozenset({"GET", "POST", "PUT"})
-_BANK_KEY = re.compile(r"bank|iban|swift|bic|routing|account_no", re.IGNORECASE)
 # Set by our code on a Payment Entry, and then only to the policy's bank account.
 _PAYMENT_BANK_KEYS = frozenset({"paid_from", "bank_account"})
 

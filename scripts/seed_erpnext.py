@@ -16,7 +16,6 @@ What it loads:
 
 from __future__ import annotations
 
-import csv
 import json
 import os
 import random
@@ -28,38 +27,24 @@ from pathlib import Path
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from po_guard.demo import ABBR, COMPANY, COST_CENTRES, ITEMS, seed_suppliers  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 URL = os.environ.get("ERPNEXT_URL", "http://localhost:8080")
-COMPANY, ABBR = "Lakeside Demo Utilities", "LDU"
 SUPPLIER_GROUP = "Demo Suppliers"
 ITEM_GROUP = "Demo Purchases"
 AUDIT = "PO Guard Audit"
 TODAY = date.today()
 
-# Synthetic: annual budgets per cost centre.
-COST_CENTRES = {
-    "Fleet Operations": 900_000, "Facilities": 600_000, "Water Operations": 750_000,
-    "IT": 400_000, "Public Health Programs": 300_000,
-}
-# Synthetic: item catalogue with a reference unit price.
-ITEMS = {
-    "LAPTOP-14": ("14-inch business laptop", 1150), "MONITOR-27": ("27-inch monitor", 290),
-    "TONER-K": ("Black toner cartridge", 88), "PAPER-A4": ("Copy paper, case", 42),
-    "SALT-TON": ("Road salt, per ton", 78), "ASPHALT-TON": ("Hot-mix asphalt, per ton", 96),
-    "DIESEL-GAL": ("Diesel, per gallon", 3.85), "TIRE-TRK": ("Truck tyre", 410),
-    "PIPE-DI-8": ("8-inch ductile iron pipe, per ft", 54), "VALVE-GATE-8": ("8-inch gate valve", 1650),
-    "CHLORINE-LB": ("Chlorine, per lb", 1.9), "PPE-KIT": ("PPE kit", 65),
-    "SECURITY-HR": ("Security guard, per hour", 34), "CLEAN-HR": ("Janitorial, per hour", 29),
-    "CONSULT-HR": ("Consulting, per hour", 185), "HVAC-SVC": ("HVAC service visit", 640),
-    "GENERATOR-RENT": ("Generator rental, per day", 420), "LIFT-RENT": ("Boom lift rental, per day", 380),
-}
 USERS = {
     "requester@example.com": ("Riley", "Requester", ["Purchase User"]),
     "requester2@example.com": ("Sam", "Second-Requester", ["Purchase User"]),
     "manager@example.com": ("Morgan", "Manager", ["Purchase User", "Purchase Manager"]),
     "director@example.com": ("Dana", "Director", ["Purchase User", "Purchase Manager"]),
 }
-USER_ROLES_EXTRA = ["Accounts User", "Stock User"]  # read access to cost centres and items
+# Read access to cost centres and items; supplier creation (onboarding is a po-guard tool).
+USER_ROLES_EXTRA = ["Accounts User", "Stock User", "Purchase Master Manager"]
 
 PO_FIELDS = [
     {"fieldname": "po_guard_section", "fieldtype": "Section Break", "label": "po-guard",
@@ -182,8 +167,7 @@ def masters(a: Admin) -> None:
                   "is_purchase_item": 1, "include_item_in_manufacturing": 0}, code)
 
     have = {s["supplier_name"] for s in a.get_list("Supplier", ["supplier_name"])}
-    rows = [r for r in csv.DictReader((ROOT / "data/seed/suppliers.csv").open())
-            if r["role"] == "master"]
+    rows = seed_suppliers("master")
     for r in rows:
         if r["name"] in have:
             continue
@@ -219,10 +203,17 @@ def _restart_backend() -> None:
 def users(a: Admin, retry: bool = True) -> dict[str, tuple[str, str]]:
     keys = {}
     for email, (first, last, roles) in USERS.items():
+        want = roles + USER_ROLES_EXTRA
         if not a.exists("User", email):
             a.insert({"doctype": "User", "email": email, "first_name": first, "last_name": last,
                       "send_welcome_email": 0, "user_type": "System User",
-                      "roles": [{"role": r} for r in roles + USER_ROLES_EXTRA]})
+                      "roles": [{"role": r} for r in want]})
+        else:
+            doc = a.call("GET", f"/api/resource/User/{email}")["data"]
+            have = [r["role"] for r in doc["roles"]]
+            if set(want) - set(have):
+                a.call("PUT", f"/api/resource/User/{email}",
+                       json={"roles": [{"role": r} for r in sorted(set(have) | set(want))]})
         secret = a.call("POST", "/api/method/frappe.core.doctype.user.user.generate_keys",
                         json={"user": email})["message"]["api_secret"]
         key = a.call("GET", f"/api/resource/User/{email}")["data"]["api_key"]

@@ -14,8 +14,9 @@ What it loads:
   set last purchase prices and part-consume budgets, some of them received, invoiced and
   paid.
 - Users (local test accounts, @example.com) with API keys, written to .env.
-- Approval workflows for material requests, purchase orders (inactive for now),
-  purchase invoices, payments and erp-guard change requests.
+- Approval workflows (all active) for material requests, purchase orders, purchase
+  invoices, payments and erp-guard change requests. A re-run brings existing workflows up
+  to the definitions here.
 
 ERPNext's Buying, Stock and Accounts Settings are left at their defaults.
 """
@@ -74,17 +75,19 @@ BUSINESS_ROLES = ["Purchase User", "Purchase Manager", "Stock User", "Accounts U
 PO_FIELDS = [
     {"fieldname": "erp_guard_section", "fieldtype": "Section Break", "label": "erp-guard",
      "insert_after": "items"},
-    {"fieldname": "erp_guard_status", "fieldtype": "Select", "label": "erp-guard status",
-     "options": "Draft\nPending Approval\nApproved\nRejected\nCancelled", "default": "Draft",
-     "allow_on_submit": 1, "in_list_view": 1, "insert_after": "erp_guard_section"},
     {"fieldname": "erp_guard_cost_centre", "fieldtype": "Link", "options": "Cost Center",
-     "label": "Cost centre (erp-guard)", "insert_after": "erp_guard_status"},
+     "label": "Cost centre (erp-guard)", "insert_after": "erp_guard_section"},
     {"fieldname": "erp_guard_approver", "fieldtype": "Data", "label": "Approved by",
      "allow_on_submit": 1, "read_only": 1, "insert_after": "erp_guard_cost_centre"},
     {"fieldname": "erp_guard_reason", "fieldtype": "Small Text", "label": "Reject/cancel reason",
      "allow_on_submit": 1, "insert_after": "erp_guard_approver"},
     {"fieldname": "erp_guard_notes", "fieldtype": "Small Text", "label": "Notes",
      "insert_after": "erp_guard_reason"},
+    # A draft order cancelled through erp-guard: drafts can't be cancelled in ERPNext, and
+    # erp-guard never deletes, so the draft stays with this flag (no workflow action is
+    # offered on it any more).
+    {"fieldname": "erp_guard_cancelled", "fieldtype": "Check", "label": "Cancelled (draft)",
+     "default": "0", "read_only": 1, "in_list_view": 1, "insert_after": "erp_guard_notes"},
 ]
 SUPPLIER_FIELDS = [
     {"fieldname": "erp_guard_onboarded_by", "fieldtype": "Data", "label": "Onboarded by",
@@ -402,13 +405,12 @@ def history(keys: dict[str, tuple[str, str]]) -> None:
             "supplier": rng.choice(suppliers), "company": COMPANY,
             "transaction_date": when.isoformat(),
             "schedule_date": (when + timedelta(days=14)).isoformat(),
-            "erp_guard_cost_centre": f"{cc} - {ABBR}", "erp_guard_status": "Pending Approval",
+            "erp_guard_cost_centre": f"{cc} - {ABBR}",
             "erp_guard_notes": HISTORY_NOTE, "items": items})
         r.raise_for_status()
         name = r.json()["data"]["name"]
         s = appr.put(f"/api/resource/Purchase Order/{name}", json={
-            "docstatus": 1, "erp_guard_status": "Approved",
-            "erp_guard_approver": "director@example.com"})
+            "docstatus": 1, "erp_guard_approver": "director@example.com"})
         if s.status_code >= 400:
             raise RuntimeError(f"submitting {name}: {s.text[:800]}")
     print(f"history: {len(plan)} approved orders")
@@ -465,17 +467,16 @@ def history_documents(a: Admin) -> None:
 
 
 # Approval workflows: doctype -> (role that submits for approval and revises, roles that
-# approve and reject, active). Who may approve what, and up to how much, is erp-guard's
-# policy (config/policy.toml); these roles only let the right people apply transitions.
+# approve and reject). Who may approve what, and up to how much, is erp-guard's policy
+# (config/policy.toml); these roles only let the right people apply transitions.
 # Invoices: the controller (Accounts Manager), and the director as backup (Purchase
-# Manager; policy refuses the manager). The purchase order's workflow starts inactive: v1's
-# order approval still uses the erp_guard_status field until it moves onto the workflow.
+# Manager; policy refuses the manager).
 WORKFLOWS = {
-    "Material Request": ("Purchase User", ("Purchase Manager",), True),
-    "Purchase Order": ("Purchase User", ("Purchase Manager",), False),
-    "Purchase Invoice": ("Accounts User", ("Accounts Manager", "Purchase Manager"), True),
-    "Payment Entry": ("Accounts User", ("Purchase Manager",), True),
-    CHANGE_REQUEST: ("Purchase User", ("Purchase Manager",), True),
+    "Material Request": ("Purchase User", ("Purchase Manager",)),
+    "Purchase Order": ("Purchase User", ("Purchase Manager",)),
+    "Purchase Invoice": ("Accounts User", ("Accounts Manager", "Purchase Manager")),
+    "Payment Entry": ("Accounts User", ("Purchase Manager",)),
+    CHANGE_REQUEST: ("Purchase User", ("Purchase Manager",)),
 }
 STATES = [("Draft", 0), ("Pending Approval", 0), ("Approved", 1), ("Rejected", 0),
           ("Cancelled", 2)]
@@ -484,29 +485,48 @@ TRANSITIONS = [("Draft", "Submit for Approval", "Pending Approval", False),
                ("Pending Approval", "Approve", "Approved", True),
                ("Pending Approval", "Reject", "Rejected", True),
                ("Rejected", "Revise", "Draft", False)]
+# Purchase orders: a draft cancelled through erp-guard (erp_guard_cancelled) gets no more
+# transitions, and entering Approved records who approved, in the same transaction.
+CONDITIONS = {"Purchase Order": "not doc.erp_guard_cancelled"}
+ON_ENTER = {("Purchase Order", "Approved"): ("erp_guard_approver", "frappe.session.user")}
+
+
+def _workflow(doctype: str, submitter: str, approvers: tuple[str, ...]) -> dict:
+    # The submitter edits drafts and rejected documents, the (first) approver the rest.
+    edits = {"Draft": submitter, "Rejected": submitter}
+    states = []
+    for st, ds in STATES:
+        row = {"state": st, "doc_status": str(ds), "allow_edit": edits.get(st, approvers[0])}
+        if (doctype, st) in ON_ENTER:
+            field, expr = ON_ENTER[(doctype, st)]
+            row |= {"update_field": field, "update_value": expr, "evaluate_as_expression": 1}
+        states.append(row)
+    return {
+        "doctype": "Workflow", "workflow_name": f"{doctype} Approval",
+        "document_type": doctype, "is_active": 1, "override_status": 0,
+        "send_email_alert": 0, "workflow_state_field": "workflow_state", "states": states,
+        "transitions": [{"state": st, "action": act, "next_state": nxt, "allowed": role,
+                         "allow_self_approval": 1, "condition": CONDITIONS.get(doctype)}
+                        for st, act, nxt, by_approver in TRANSITIONS
+                        for role in (approvers if by_approver else (submitter,))],
+    }
 
 
 def workflows(a: Admin) -> None:
+    """Create each workflow, or bring an existing one up to this definition (a site seeded
+    before the purchase order's workflow was turned on gets it activated here)."""
     for state, _ in STATES:
         a.ensure({"doctype": "Workflow State", "workflow_state_name": state}, state)
     for _, action, _, _ in TRANSITIONS:
         a.ensure({"doctype": "Workflow Action Master", "workflow_action_name": action}, action)
-    for doctype, (submitter, approvers, active) in WORKFLOWS.items():
-        # The submitter edits drafts and rejected documents, the (first) approver the rest.
-        edits = {"Draft": submitter, "Rejected": submitter}
-        approver = approvers[0]
-        a.ensure({
-            "doctype": "Workflow", "workflow_name": f"{doctype} Approval",
-            "document_type": doctype, "is_active": int(active), "override_status": 0,
-            "send_email_alert": 0, "workflow_state_field": "workflow_state",
-            "states": [{"state": st, "doc_status": str(ds),
-                        "allow_edit": edits.get(st, approver)} for st, ds in STATES],
-            "transitions": [{"state": st, "action": act, "next_state": nxt, "allowed": role,
-                             "allow_self_approval": 1}
-                            for st, act, nxt, by_approver in TRANSITIONS
-                            for role in (approvers if by_approver else (submitter,))],
-        }, f"{doctype} Approval")
-    print(f"workflows: {len(WORKFLOWS)}")
+    for doctype, (submitter, approvers) in WORKFLOWS.items():
+        doc = _workflow(doctype, submitter, approvers)
+        name = doc["workflow_name"]
+        if a.exists("Workflow", name):
+            a.call("PUT", f"/api/resource/Workflow/{httpx.URL(name)}", json=doc)
+        else:
+            a.insert(doc)
+    print(f"workflows: {len(WORKFLOWS)}, all active")
 
 
 def _client(kv: tuple[str, str]) -> httpx.Client:

@@ -282,16 +282,29 @@ def _copy(doc: dict, drop: frozenset[str]) -> dict:
     return out
 
 
-_STATUS = {s.value: s for s in Status}
+# Purchase Order workflow ("Purchase Order Approval", seeded by `make seed`): its draft
+# states and the actions between them. Approve submits the order.
+_DRAFT_STATES = {"Draft": Status.DRAFT, "Pending Approval": Status.PENDING,
+                 "Rejected": Status.REJECTED}
+SUBMIT_FOR_APPROVAL, APPROVE, REJECT, REVISE = ("Submit for Approval", "Approve", "Reject",
+                                                "Revise")
+
+
+def _order_status(d: dict) -> Status:
+    """docstatus first: submitted orders were approved (history orders predate the
+    workflow), and a plain cancel leaves workflow_state at "Approved" in Frappe v16. A
+    cancelled draft keeps its workflow state and carries the `erp_guard_cancelled` flag."""
+    if d.get("docstatus") == 2:
+        return Status.CANCELLED
+    if d.get("docstatus") == 1:
+        return Status.APPROVED
+    if d.get("erp_guard_cancelled"):
+        return Status.CANCELLED
+    return _DRAFT_STATES.get(d.get("workflow_state") or "Draft", Status.DRAFT)
 
 
 def _order_from_doc(d: dict) -> PurchaseOrder:
-    if d.get("docstatus") == 1:
-        status = Status.APPROVED
-    elif d.get("docstatus") == 2:
-        status = Status.CANCELLED
-    else:
-        status = _STATUS.get(d.get("erp_guard_status") or "Draft", Status.DRAFT)
+    status = _order_status(d)
     lines = tuple(
         Line(i["item_code"], Decimal(str(i["qty"])), Decimal(str(i["rate"])),
              i.get("description") or "")
@@ -468,7 +481,8 @@ class ErpNext:
         heads = self.c.get_list(
             "Purchase Order",
             ["name", "supplier", "erp_guard_cost_centre", "owner", "docstatus",
-             "erp_guard_status", "transaction_date", "erp_guard_approver", "erp_guard_notes"],
+             "workflow_state", "erp_guard_cancelled", "transaction_date",
+             "erp_guard_approver", "erp_guard_notes"],
             filters, order_by="transaction_date desc")
         if not heads:
             return []
@@ -535,42 +549,67 @@ class ErpNext:
         body = {"supplier": supplier_id, "company": self.company,
                 "transaction_date": date.today().isoformat(),
                 "schedule_date": required_by.isoformat(),
-                "erp_guard_cost_centre": cost_centre, "erp_guard_status": Status.DRAFT.value,
-                "erp_guard_notes": notes, "items": self._items(lines, cost_centre, required_by)}
+                "erp_guard_cost_centre": cost_centre, "erp_guard_notes": notes,
+                "items": self._items(lines, cost_centre, required_by)}
         return _order_from_doc(self.c.request("POST", _res("Purchase Order"), body=body)["data"])
 
+    # Order lifecycle on the "Purchase Order Approval" workflow. ERPNext checks each action
+    # against the user's roles; the service's checks have run before any of these.
     def _put(self, order_id: str, body: dict) -> PurchaseOrder:
         d = self.c.request("PUT", _res("Purchase Order", order_id), body=body)["data"]
         return _order_from_doc(d)
 
+    def _current(self, order_id: str) -> dict:
+        current = self.c.get_doc("Purchase Order", order_id)
+        if current is None:
+            raise ErpError(f"No purchase order {order_id}")
+        return current
+
+    def _transition(self, order_id: str, action: str) -> PurchaseOrder:
+        return _order_from_doc(self.apply_workflow("Purchase Order", order_id, action))
+
     def set_status(self, order_id, status, reason):
-        return self._put(order_id, {"erp_guard_status": status.value,
-                                    "erp_guard_reason": reason or ""})
+        """Submit for approval (a rejected order is revised back to Draft first), or reject
+        with the reason saved on the order before the transition."""
+        if status is Status.PENDING:
+            if self._current(order_id).get("workflow_state") == "Rejected":
+                self._transition(order_id, REVISE)
+            return self._transition(order_id, SUBMIT_FOR_APPROVAL)
+        if status is Status.REJECTED:
+            self._put(order_id, {"erp_guard_reason": reason or ""})
+            return self._transition(order_id, REJECT)
+        raise ErpError(f"An ERPNext purchase order isn't set to {status.value} directly")
 
     def approve_order(self, order_id):
-        user = self.whoami()
-        return self._put(order_id, {"erp_guard_status": Status.APPROVED.value,
-                                    "erp_guard_approver": user, "docstatus": 1})
+        """Approve submits the order. The workflow's Approved state records the acting user
+        in `erp_guard_approver` (an update-field expression the seed sets), so the approver
+        is ERPNext's own record, whichever way the order was approved."""
+        return self._transition(order_id, APPROVE)
 
     def cancel_order(self, order_id, reason):
-        current = self.c.get_doc("Purchase Order", order_id)
-        if current is None:
-            raise ErpError(f"No purchase order {order_id}")
-        if current["docstatus"] == 1:
-            self.c.request("POST", "/api/method/frappe.client.cancel",
-                           body={"doctype": "Purchase Order", "name": order_id})
+        """An approved (submitted) order is cancelled in ERPNext; a draft in any workflow
+        state gets the `erp_guard_cancelled` flag and the reason, and stays a draft. Nothing
+        is deleted."""
+        if self._current(order_id)["docstatus"] == 1:
+            self.cancel("Purchase Order", order_id)
             return self.get_order(order_id)
-        return self._put(order_id, {"erp_guard_status": Status.CANCELLED.value,
-                                    "erp_guard_reason": reason})
+        return self._put(order_id, {"erp_guard_cancelled": 1, "erp_guard_reason": reason})
 
     def amend_order(self, order_id, lines, notes):
-        current = self.c.get_doc("Purchase Order", order_id)
-        if current is None:
-            raise ErpError(f"No purchase order {order_id}")
+        """New lines on a draft. A rejected order is revised back to Draft first. ERPNext's
+        workflow has no way back from Pending Approval, so a pending order is refused: an
+        approver rejects it, then it can be amended."""
+        current = self._current(order_id)
+        state = current.get("workflow_state")
+        if state == "Pending Approval":
+            raise ErpError(f"{order_id} is pending approval; ERPNext's workflow has no way "
+                           "back to Draft from there. Ask an approver to reject it, then amend")
+        if state == "Rejected":
+            self._transition(order_id, REVISE)
         schedule = date.fromisoformat(str(current["schedule_date"])[:10])
         return self._put(order_id, {
             "items": self._items(lines, current.get("erp_guard_cost_centre") or "", schedule),
-            "erp_guard_notes": notes, "erp_guard_status": Status.DRAFT.value})
+            "erp_guard_notes": notes})
 
     def write_audit(self, record):
         body = {"action": record.action, "actor": record.actor, "outcome": record.outcome,

@@ -103,6 +103,66 @@ def test_reject_amend_resubmit(created):
     assert o.status == Status.DRAFT and o.total == 640
 
 
+def _wf(po: str, action: str, comment: str = "") -> dict:
+    return {"doctype": "Purchase Order", "name": po, "action": action,
+            **({"comment": comment} if comment else {})}
+
+
+def test_live_po_workflow_states(created):
+    """Order approval runs on ERPNext's own workflow: the generic workflow_action reaches
+    the purchase-to-pay checks, and ERPNext records the states."""
+    req, mgr = svc("REQUESTER"), svc("MANAGER")
+    _, out = run(req, "create_purchase_order", _po())
+    assert out.outcome == "written", out.message
+    po = out.target
+    created.append(po)
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["workflow_state"], doc["docstatus"]) == ("Draft", 0)
+    p, sub = run(req, "workflow_action", _wf(po, "Submit for Approval"))
+    assert sub.outcome == "written", (sub.message, [r.message for r in p.checks])
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["workflow_state"], doc["docstatus"]) == ("Pending Approval", 0)
+    assert req.erp.get_order(po).status == Status.PENDING
+    # The requester's own approval is refused by the pack's checks, before ERPNext.
+    p = req.preview("workflow_action", _wf(po, "Approve"))
+    assert p.blocked and any(r.check == "segregation_of_duties" for r in p.checks
+                             if r.level == "block")
+    p, ok = run(mgr, "workflow_action", _wf(po, "Approve", "fine"))
+    assert ok.outcome == "written", (ok.message, [r.message for r in p.checks])
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["workflow_state"], doc["docstatus"]) == ("Approved", 1)
+    o = req.erp.get_order(po)
+    assert o.status == Status.APPROVED and o.approver == "manager@example.com"
+    trail = req.erp.read_audit(po, limit=10)
+    assert [(a.action, a.outcome) for a in trail][:2] == [("workflow_action", "written")] * 2
+
+
+def test_live_po_reject_revise_and_draft_cancel(created):
+    """Reject stores the reason on the order; Revise goes through amend_purchase_order; a
+    cancelled draft stays a draft with the cancelled flag, and ERPNext offers no more
+    transitions on it."""
+    req, mgr = svc("REQUESTER"), svc("MANAGER")
+    _, out = run(req, "create_purchase_order", _po())
+    po = out.target
+    created.append(po)
+    assert run(req, "submit_for_approval", {"po": po})[1].outcome == "written"
+    assert mgr.preview("workflow_action", _wf(po, "Reject")).blocked  # needs a reason
+    _, rej = run(mgr, "workflow_action", _wf(po, "Reject", "qty too high"))
+    assert rej.outcome == "written", rej.message
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["workflow_state"], doc["erp_guard_reason"]) == ("Rejected", "qty too high")
+    assert req.erp.get_order(po).status == Status.REJECTED
+    p = req.preview("workflow_action", _wf(po, "Revise"))
+    assert p.blocked and "amend_purchase_order" in " ".join(r.message for r in p.checks)
+    assert req.preview("submit_document", {"doctype": "Purchase Order", "name": po}).blocked
+    _, c = run(req, "cancel_purchase_order", {"po": po, "reason": "not needed"})
+    assert c.outcome == "written", c.message
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["docstatus"], doc["erp_guard_cancelled"]) == (0, 1)
+    assert req.erp.get_order(po).status == Status.CANCELLED
+    assert req.erp.transitions("Purchase Order", po) == []  # nothing more to do with it
+
+
 def test_write_without_code_is_refused_and_audited_in_erp(created):
     req = svc("REQUESTER")
     before = len(req.erp.list_orders(cost_centre=CC))
@@ -210,19 +270,18 @@ def test_live_users_and_roles():
 
 
 def test_live_workflows_exist():
-    """Material requests, invoices, payments and change requests run on active workflows;
-    the purchase order's is created inactive (its approval moves onto it later). A fresh
-    draft request goes Draft -> Pending Approval -> Approved, then is cancelled."""
-    for tag, doctype in (("REQUESTER", "Material Request"), ("AP", "Purchase Invoice"),
-                         ("TREASURY", "Payment Entry"),
+    """Material requests, purchase orders, invoices, payments and change requests run on
+    active workflows. A fresh draft request goes Draft -> Pending Approval -> Approved, then
+    is cancelled."""
+    for tag, doctype in (("REQUESTER", "Material Request"), ("REQUESTER", "Purchase Order"),
+                         ("AP", "Purchase Invoice"), ("TREASURY", "Payment Entry"),
                          ("REQUESTER", "ERP Guard Change Request")):
         assert meta_of(svc(tag), doctype)[0].has_workflow, doctype
-    assert not meta_of(svc("REQUESTER"), "Purchase Order")[0].has_workflow
     # Only System Manager reads Workflow records: the seed's local Administrator login.
     admin = httpx.Client(base_url=URL, timeout=60)
     admin.post("/api/method/login", json={"usr": "Administrator", "pwd": "admin"})
     po_flow = admin.get("/api/resource/Workflow/Purchase Order Approval").json()["data"]
-    assert (po_flow["document_type"], po_flow["is_active"]) == ("Purchase Order", 0)
+    assert (po_flow["document_type"], po_flow["is_active"]) == ("Purchase Order", 1)
     pi_flow = svc("AP").erp.get_meta("Purchase Invoice")["__workflow_docs"][0]
     assert {t["allowed"] for t in pi_flow["transitions"] if t["action"] == "Approve"} == {
         "Accounts Manager", "Purchase Manager"}
@@ -306,6 +365,7 @@ def test_live_read_grants(created):
     o = req.create_order("TRANE U.S. INC", CC, [Line("PAPER-A4", Decimal(1), Decimal(42))],
                          "live read grants", date.today() + timedelta(days=14))
     created.append(o.id)
+    req.set_status(o.id, Status.PENDING, "")
     mgr.approve_order(o.id)
     rcv = svc("RECEIVER").erp
     pr = rcv.insert(rcv.map_doc("Purchase Order", o.id, "Purchase Receipt"))

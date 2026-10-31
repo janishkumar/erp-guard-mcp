@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from conftest import REQ, REQ2, TODAY
+from conftest import MGR, REQ, REQ2, TODAY
 from fake_erpnext import FakeErpNext, connector
 
 from erp_guard.checks import BLOCK, PASS, WARN
@@ -28,7 +28,7 @@ def fake():
     # A live order to the same supplier and cost centre three days ago: $48K.
     f.add({"doctype": "Purchase Order", "name": "PUR-ORD-2026-00001", "docstatus": 0,
            "supplier": "HERC RENTALS INC", "erp_guard_cost_centre": FLEET, "owner": REQ2,
-           "erp_guard_status": "Pending Approval",
+           "workflow_state": "Pending Approval",
            "transaction_date": (TODAY - timedelta(days=3)).isoformat(),
            "items": [{"item_code": "SALT-TON", "qty": 1, "rate": 48000}]})
     return f
@@ -113,7 +113,7 @@ def test_generic_purchase_order_create_writes_through_the_pack(svc, fake):
     assert out.outcome == "written", out.message
     po = fake.docs[("Purchase Order", out.target)]
     assert po["erp_guard_cost_centre"] == FLEET and po["erp_guard_notes"] == "road salt"
-    assert po["erp_guard_status"] == "Draft"
+    assert "erp_guard_status" not in po  # the workflow sets the state
 
 
 def test_pack_refuses_fields_it_does_not_translate(svc):
@@ -334,7 +334,6 @@ def test_child_rows_are_not_written_on_their_own(svc, fake):
 
 
 @pytest.mark.parametrize("action,args", [
-    ("workflow_action", {"action": "Approve"}),
     ("cancel_document", {"reason": "x"}),
     ("amend_document", {"fields": {"erp_guard_notes": "x"}}),
     ("update_document", {"fields": {"erp_guard_notes": "x"}}),
@@ -343,3 +342,76 @@ def test_other_purchase_order_ops_go_to_the_pack(svc, action, args):
     p = svc.preview(action, {"doctype": "Purchase Order", "name": "PUR-ORD-2026-00001", **args})
     assert p.blocked and any("not supported by the purchase-to-pay pack yet" in r.message
                              for r in p.checks if r.level == BLOCK)
+
+
+# --- Purchase Order workflow actions go to the v1 tools' checks ------------------------
+
+PO1 = "PUR-ORD-2026-00001"
+APPLY = "frappe.model.workflow.apply_workflow"
+
+
+def _wf(action: str, comment: str | None = None) -> dict:
+    return {"doctype": "Purchase Order", "name": PO1, "action": action,
+            **({"comment": comment} if comment is not None else {})}
+
+
+def test_purchase_order_approve_runs_the_approval_checks(fake, policy):
+    fake.user = MGR
+    svc = Service(connector(fake), policy, today=lambda: TODAY)
+    p = svc.preview("workflow_action", _wf("Approve", "fine"))
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    assert p.summary.startswith(f"Approve {PO1} ($48,000.00) as {MGR}")
+    assert {"state", "segregation_of_duties", "approval_authority", "self_dealing",
+            "split_purchase", "budget"} <= {r.check for r in p.checks}
+    out = svc.execute("workflow_action", _wf("Approve", "fine"), p.code)
+    assert out.outcome == "written", out.message
+    assert fake.method_calls(APPLY)[-1]["action"] == "Approve"
+    doc = fake.docs[("Purchase Order", PO1)]
+    assert (doc["workflow_state"], doc["docstatus"], doc["erp_guard_approver"]) == (
+        "Approved", 1, MGR)
+    rec = fake.audit()[-1]
+    assert (rec["action"], rec["outcome"], rec["target"]) == ("workflow_action", "written", PO1)
+
+
+def test_purchase_order_approve_is_refused_for_the_requester(fake, policy):
+    fake.user = REQ2  # raised the order
+    svc = Service(connector(fake), policy, today=lambda: TODAY)
+    p = svc.preview("workflow_action", _wf("Approve"))
+    assert p.blocked and by_check(p.checks, "segregation_of_duties")[0].level == BLOCK
+    assert svc.execute("workflow_action", _wf("Approve"), "ABCD2345").outcome == "refused"
+    assert not fake.method_calls(APPLY)
+
+
+def test_purchase_order_submit_and_reject_through_workflow_action(fake, policy):
+    po = fake.docs[("Purchase Order", PO1)]
+    po["workflow_state"] = "Draft"
+    fake.user = REQ2
+    req2 = Service(connector(fake), policy, today=lambda: TODAY)
+    assert req2.preview("workflow_action", _wf("Submit for Approval", "now")).blocked
+    p = req2.preview("workflow_action", _wf("Submit for Approval"))
+    assert p.code and p.summary == f"Submit {PO1} for approval."
+    assert req2.execute("workflow_action", _wf("Submit for Approval"), p.code).outcome == \
+        "written"
+    assert po["workflow_state"] == "Pending Approval"
+
+    fake.user = MGR
+    mgr = Service(connector(fake), policy, today=lambda: TODAY)
+    p = mgr.preview("workflow_action", _wf("Reject"))
+    assert p.blocked and "reason" in " ".join(r.message for r in p.checks if r.level == BLOCK)
+    p = mgr.preview("workflow_action", _wf("Reject", "too much salt"))
+    assert p.code and p.summary.startswith(f"Reject {PO1}")
+    out = mgr.execute("workflow_action", _wf("Reject", "too much salt"), p.code)
+    assert out.outcome == "written", out.message
+    assert (po["workflow_state"], po["erp_guard_reason"]) == ("Rejected", "too much salt")
+
+
+@pytest.mark.parametrize("action,needle", [
+    ("Revise", "amend_purchase_order"),
+    ("Delete", "Submit for Approval, Approve, Reject, Revise"),
+])
+def test_purchase_order_workflow_actions_the_pack_refuses(svc, fake, action, needle):
+    p = svc.preview("workflow_action", _wf(action))
+    assert p.blocked and p.code is None
+    assert needle in " ".join(r.message for r in p.checks if r.level == BLOCK)
+    assert svc.execute("workflow_action", _wf(action), "ABCD2345").outcome == "refused"
+    assert not fake.method_calls(APPLY)

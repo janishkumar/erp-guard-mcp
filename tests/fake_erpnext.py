@@ -15,6 +15,9 @@ import httpx
 from erp_guard.connectors.erpnext import AUDIT_DOCTYPE, ErpNext, FrappeClient
 
 FIX = Path(__file__).parent / "fixtures" / "erpnext"
+# The seeded approval workflows: action -> (next state, docstatus).
+_NEXT = {"Submit for Approval": ("Pending Approval", 0), "Approve": ("Approved", 1),
+         "Reject": ("Rejected", 0), "Revise": ("Draft", 0)}
 
 
 def _not_found(what: str) -> httpx.Response:
@@ -136,7 +139,12 @@ class FakeErpNext:
                        for a in self.transitions.get((doc["doctype"], doc["name"]), [])])
         if method == "frappe.model.workflow.apply_workflow":
             d = self.docs[(body["doc"]["doctype"], body["doc"]["name"])]
-            d["workflow_state"] = body["action"] + "d"
+            state, docstatus = _NEXT.get(body["action"], (body["action"] + "d", None))
+            d["workflow_state"] = state
+            if docstatus is not None:
+                d["docstatus"] = docstatus
+            if (d["doctype"], state) == ("Purchase Order", "Approved"):
+                d["erp_guard_approver"] = self.user  # the seeded workflow's update field
             return ok(d)
         if method.endswith(".make_purchase_receipt"):
             src = self.docs[("Purchase Order", body["source_name"])]

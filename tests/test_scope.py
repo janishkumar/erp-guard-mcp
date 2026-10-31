@@ -30,6 +30,9 @@ def test_never_rules(rules):
     assert scope_of(rules, "Company") is Scope.NEVER             # by name, Setup
     assert scope_of(rules, "Budget") is Scope.NEVER              # by name, submittable
     assert scope_of(rules, "Accounts Settings") is Scope.NEVER   # single in a business module
+    for name in ("Accounting Dimension", "Inventory Dimension",          # customisation
+                 "Email Digest", "Process Statement Of Accounts", "Email Campaign"):  # scheduled
+        assert scope_of(rules, name) is Scope.NEVER, name
 
 
 def test_never_beats_pack_ownership(rules):
@@ -39,6 +42,11 @@ def test_never_beats_pack_ownership(rules):
 
 def test_ledger_read_only(rules):
     for name in ("Journal Entry", "Sales Invoice", "Stock Entry"):
+        assert scope_of(rules, name) is Scope.LEDGER, name
+
+
+def test_money_masters_read_only(rules):
+    for name in ("Pricing Rule", "Party Link", "Purchase Taxes and Charges Template"):
         assert scope_of(rules, name) is Scope.LEDGER, name
 
 
@@ -101,7 +109,7 @@ def test_lists_disjoint(rules):
     for i, a in enumerate(lists):
         for b in lists[i + 1:]:
             assert not a & b, a & b
-    assert not P2P_OWNED & (rules.never_doctypes | rules.later_doctypes)
+    assert not P2P_OWNED & (rules.never_doctypes | rules.later_doctypes | rules.safe_doctypes)
 
 
 def test_load_scope_path_and_env(tmp_path, monkeypatch):

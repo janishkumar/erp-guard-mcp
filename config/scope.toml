@@ -22,6 +22,10 @@ doctypes = [
     # Added: deletes a company's transactions in bulk. System administration, not a
     # business document, though ERPNext files it under Setup.
     "Transaction Deletion Record",
+    # Added: saving one creates custom fields on other document types (customisation).
+    "Accounting Dimension", "Inventory Dimension",
+    # Added: scheduled email, a standing rule.
+    "Email Digest", "Process Statement Of Accounts", "Email Campaign",
 ]
 
 [later]
@@ -84,6 +88,18 @@ doctypes = [
     "GL Entry", "Payment Ledger Entry", "Advance Payment Ledger Entry",
     "Stock Ledger Entry", "Account Closing Balance", "Stock Closing Balance", "Bin",
     "Loyalty Point Entry", "Ledger Merge", "Bank Statement Import",
+    # Money-affecting or check-affecting masters (read-only until their pack). Not
+    # submittable; they set prices, taxes, terms, offsets or grouping that postings and the
+    # purchase-to-pay checks rely on.
+    "Party Link", "Pricing Rule", "Promotional Scheme", "Payment Terms Template",
+    "Purchase Taxes and Charges Template", "Sales Taxes and Charges Template",
+    "Tax Withholding Category", "Tax Withholding Group", "Tax Rule", "Journal Entry Template",
+    "Accounting Period", "Currency Exchange", "Bank Transaction Rule", "Bank Account Subtype",
+    "Bank Account Type", "Shareholder", "Subscription", "Supplier Scorecard", "Supplier Group",
+    "Item Group", "POS Profile", "Serial No", "Batch",
+    # System-written logs.
+    "Ledger Health", "Bisect Nodes", "Process Payment Reconciliation Log",
+    "Bank Statement Import Log",
 ]
 
 # Submittable business document types reviewed in the v16.52.0 code: submitting posts

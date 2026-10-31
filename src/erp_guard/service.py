@@ -210,8 +210,19 @@ class Service:
             packs = [P2PPack()]
         # Generic writes to a document type a pack owns are handed to that pack.
         self.packs: list[Pack] = packs
+        if hasattr(erp, "use_scope"):
+            # The ERP client's write limit follows the same scope rules and pack ownership
+            # as the service's routing.
+            from erp_guard.generic.actions import scope_rules
+            erp.use_scope(scope_rules(), self.pack_owned)
         self.actions: dict[str, Action] = {}
         self.register(*default_actions())
+
+    def pack_for(self, doctype: str) -> Pack | None:
+        return next((p for p in self.packs if p.owns(doctype)), None)
+
+    def pack_owned(self, doctype: str) -> bool:
+        return self.pack_for(doctype) is not None
 
     def register(self, *actions: Action) -> None:
         for a in actions:

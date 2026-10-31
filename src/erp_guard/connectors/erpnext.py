@@ -25,8 +25,13 @@ from erp_guard.policy import Policy, load_policy
 
 AUDIT_DOCTYPE = "ERP Guard Audit"
 
-# v1's document types: read through /api/resource, and the default writable set.
+# v1's document types, read through /api/resource.
 RESOURCES = frozenset({"Supplier", "Purchase Order", "Item", "Cost Center", AUDIT_DOCTYPE})
+# What a client writes before the service gives it the scope rules: v1's writes only (the
+# audit doctype is create-only whatever this says).
+V1_WRITABLE = frozenset({"Supplier", "Purchase Order"})
+# Keys that make a document a child row; rows are only written inside their parent.
+_ROW_KEYS = ("parent", "parenttype", "parentfield")
 
 _BUY = "erpnext.buying.doctype"
 _STOCK = "erpnext.stock.doctype"
@@ -109,7 +114,7 @@ def _fields(obj, doctype: str | None = None):
 class FrappeClient:
     def __init__(self, base_url: str, api_key: str, api_secret: str,
                  transport: httpx.BaseTransport | None = None, timeout: float = 30.0,
-                 writable: Callable[[str], bool] = lambda d: d in RESOURCES,
+                 writable: Callable[[str], bool] = lambda d: d in V1_WRITABLE,
                  allowed_bank_values: Iterable[str] = ()):
         self.http = httpx.Client(
             base_url=base_url.rstrip("/"), timeout=timeout, transport=transport,
@@ -145,9 +150,8 @@ class FrappeClient:
             doc = body.get("doc")
             if not isinstance(doc, dict):
                 raise HardLimitError(f"{method} needs the document as an object")
-            # A child row inserted on its own is written into its parent, which changes.
-            parent = [(doc["parenttype"], False)] if doc.get("parenttype") else []
-            return [(doc.get("doctype"), method == "frappe.client.insert")] + parent
+            _refuse_child_row(doc)
+            return [(doc.get("doctype"), method == "frappe.client.insert")]
         return [(where, False)]
 
     def _check_bank(self, body, doctype: str | None) -> None:
@@ -185,6 +189,8 @@ class FrappeClient:
                 if name not in RESOURCES and not self.writable(name):
                     raise HardLimitError(f"doctype not allowed: {name}")
             else:
+                if isinstance(body, dict):
+                    _refuse_child_row({"doctype": name, **body})
                 # POST to the collection creates; anything naming a record changes it.
                 self._require_writable(name, creating=verb == "POST" and not m.group(3))
         elif name not in METHODS:
@@ -226,6 +232,16 @@ class FrappeClient:
         if order_by:
             params["order_by"] = order_by
         return self.request("GET", _res(doctype), params=params)["data"]
+
+
+def _refuse_child_row(doc: dict) -> None:
+    """Child rows are written through their parent document, never on their own (that would
+    skip the parent's checks). Scope classifies child-table types as never writable too."""
+    found = [k for k in _ROW_KEYS if doc.get(k)]
+    if found:
+        raise HardLimitError(
+            f"{doc.get('doctype')} rows of {doc.get('parenttype') or 'a parent'} are written "
+            f"through their parent document, never on their own ({', '.join(found)} set)")
 
 
 def _res(doctype: str, name: str | None = None) -> str:
@@ -312,10 +328,8 @@ class ErpNext:
         client = FrappeClient(os.environ.get("ERPNEXT_URL", "http://localhost:8080"),
                               os.environ[kname], os.environ[sname],
                               allowed_bank_values={policy.payment.bank_account})
-        erp = cls(client, os.environ.get("ERPNEXT_COMPANY", "Lakeside Demo Utilities"),
-                  os.environ.get("ERPNEXT_SUPPLIER_GROUP", "Demo Suppliers"))
-        erp.use_scope()
-        return erp
+        return cls(client, os.environ.get("ERPNEXT_COMPANY", "Lakeside Demo Utilities"),
+                   os.environ.get("ERPNEXT_SUPPLIER_GROUP", "Demo Suppliers"))
 
     # reads -----------------------------------------------------------------------------
     def whoami(self) -> str:
@@ -330,13 +344,13 @@ class ErpNext:
             return self.c.request("GET", path, params=kwargs).get("message")
         return self.c.request("POST", path, body=kwargs).get("message")
 
-    def use_scope(self, rules=None, pack_owned: Callable[[str], bool] | None = None) -> None:
+    def use_scope(self, rules, pack_owned: Callable[[str], bool]) -> None:
         """Write only the document types the scope rules allow (generic, later-phase and
-        pack-owned ones), decided from each type's metadata as this user reads it."""
-        from erp_guard.generic.scope import load_scope, writable_predicate
-        from erp_guard.packs.p2p import P2P_OWNED
-        self.c.writable = writable_predicate(rules or load_scope(), self.get_meta,
-                                             pack_owned or P2P_OWNED.__contains__)
+        pack-owned ones, never child tables), decided from each type's metadata as this user
+        reads it. The service calls this with its own rules and packs, so the client's
+        limit and the service's routing agree."""
+        from erp_guard.generic.scope import writable_predicate
+        self.c.writable = writable_predicate(rules, self.get_meta, pack_owned)
 
     def roles(self) -> list[str]:
         """The ERPNext roles of the user this connector acts as."""

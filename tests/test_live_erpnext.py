@@ -168,3 +168,22 @@ def test_live_generic_scope_and_workflow_detection():
     out = req.execute("create_document", {"doctype": "Server Script", "fields": {}}, None)
     assert out.outcome == "refused"
     assert "Projects User" in req.erp.roles()
+
+
+def test_live_child_row_not_written_on_its_own():
+    """A real PO's item row can't be edited around the PO's checks."""
+    req = svc("REQUESTER")
+    po = req.erp.find("Purchase Order", [["docstatus", "=", 1]], ["name"], "creation asc", 1)[0]
+    row = req.erp.get_doc("Purchase Order", po["name"])["items"][0]
+    args = {"doctype": "Purchase Order Item", "name": row["name"], "fields": {"qty": 999}}
+    p = req.preview("update_document", args)
+    assert p.blocked and p.code is None
+    assert "written through their parent document" in p.checks[0].message
+    assert req.execute("update_document", args, None).outcome == "refused"
+    with pytest.raises(HardLimitError):
+        req.erp.save({**row, "qty": 999})
+    with pytest.raises(HardLimitError):
+        req.erp.c.request("PUT", f"/api/resource/Purchase Order Item/{row['name']}",
+                          body={"qty": 999})
+    after = req.erp.get_doc("Purchase Order", po["name"])["items"][0]
+    assert after["qty"] == row["qty"] and after["modified"] == row["modified"]

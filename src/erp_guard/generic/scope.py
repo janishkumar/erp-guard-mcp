@@ -2,7 +2,8 @@
 
 The rules apply in order and the first match decides (docs/design.md, "Scope rules"):
 
-1. never: single document types, the system modules and a list of names
+1. never: child tables (rows are written through their parent document), single document
+   types, the system modules and a list of names
 2. pack: the document type is owned by a pack, which runs its own checks
 3. later: owned by a later phase but posts nothing; generic writes until then
 4. ledger: posts to the general or stock ledger; read-only until its phase
@@ -64,9 +65,11 @@ def load_scope(path: Path | None = None) -> ScopeRules:
 
 
 def classify(rules: ScopeRules, doctype: str, module: str, issingle: bool, pack_owned: bool,
-             is_submittable: bool) -> Scope:
-    """The scope of one document type, from its ERPNext metadata and pack ownership."""
-    if issingle or module in rules.never_modules or doctype in rules.never_doctypes:
+             is_submittable: bool, istable: bool = False) -> Scope:
+    """The scope of one document type, from its ERPNext metadata and pack ownership. A
+    child table is never written on its own: that would skip its parent's checks."""
+    if istable or issingle or module in rules.never_modules or \
+            doctype in rules.never_doctypes:
         return Scope.NEVER
     if pack_owned:
         return Scope.PACK
@@ -94,5 +97,6 @@ def writable_predicate(rules: ScopeRules, meta_of: Callable[[str], dict],
         except Exception:  # noqa: BLE001 - unknown or unreadable: fail closed
             return False
         return classify(rules, doctype, m.get("module") or "", bool(m.get("issingle")),
-                        pack_owned(doctype), bool(m.get("is_submittable"))) in WRITABLE
+                        pack_owned(doctype), bool(m.get("is_submittable")),
+                        istable=bool(m.get("istable"))) in WRITABLE
     return writable

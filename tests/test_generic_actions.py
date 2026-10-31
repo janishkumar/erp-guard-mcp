@@ -289,15 +289,57 @@ def test_canonical_fields():
         == {"doctype": "Task", "name": "T", "reason": "r"}
 
 
-def test_writable_follows_scope(fake):
-    erp = connector(fake)
+def test_writable_follows_scope(svc, fake):
+    erp = svc.erp  # the service hands its scope rules and packs to the client
     w = erp.c.writable
     assert w("Task") and w("Purchase Order") and w("Supplier")   # later, pack, pack
     assert not w("Journal Entry") and not w("Server Script")     # ledger, never
     assert not w("Cost Center") and not w("No Such Type")
+    assert not w("Purchase Order Item") and not w("Payment Schedule")  # child tables
     with pytest.raises(HardLimitError):
         erp.insert({"doctype": "Journal Entry", "voucher_type": "Journal Entry"})
 
 
 def test_whoami_roles(svc):
     assert svc.erp.roles() == ["Purchase User", "Projects User"]
+
+
+def test_writable_follows_the_services_packs(fake, policy):
+    svc = Service(connector(fake), policy, today=lambda: TODAY, packs=[])
+    # Without the pack, Purchase Order is no longer pack-owned: routing and the client's
+    # limit agree (it's an unreviewed submittable type, so never).
+    assert not svc.pack_owned("Purchase Order") and not svc.erp.c.writable("Purchase Order")
+    assert svc.preview("create_document", {"doctype": "Purchase Order",
+                                           "fields": {"supplier": "x"}}).blocked
+
+
+def test_child_rows_are_not_written_on_their_own(svc, fake):
+    po = fake.docs[("Purchase Order", "PUR-ORD-2026-00001")]
+    po["items"][0].update({"doctype": "Purchase Order Item", "name": "row1",
+                           "parent": po["name"], "parenttype": "Purchase Order",
+                           "parentfield": "items"})
+    fake.add(po["items"][0])
+    args = {"doctype": "Purchase Order Item", "name": "row1", "fields": {"qty": 5}}
+    p = svc.preview("update_document", args)
+    assert p.blocked and p.code is None
+    scope = by_check(p.checks, "scope")[0]
+    assert scope.level == BLOCK and "written through their parent document" in scope.message
+    assert svc.execute("update_document", args, "ABCD2345").outcome == "refused"
+    assert not fake.method_calls("frappe.client.save")
+    with pytest.raises(HardLimitError):  # and the client refuses it whatever the body says
+        svc.erp.save({"doctype": "Purchase Order Item", "name": "row1", "qty": 5})
+    with pytest.raises(HardLimitError):
+        svc.erp.save({**po["items"][0], "qty": 5})
+    assert fake.docs[("Purchase Order Item", "row1")]["qty"] == 1
+
+
+@pytest.mark.parametrize("action,args", [
+    ("workflow_action", {"action": "Approve"}),
+    ("cancel_document", {"reason": "x"}),
+    ("amend_document", {"fields": {"erp_guard_notes": "x"}}),
+    ("update_document", {"fields": {"erp_guard_notes": "x"}}),
+])
+def test_other_purchase_order_ops_go_to_the_pack(svc, action, args):
+    p = svc.preview(action, {"doctype": "Purchase Order", "name": "PUR-ORD-2026-00001", **args})
+    assert p.blocked and any("not supported by the purchase-to-pay pack yet" in r.message
+                             for r in p.checks if r.level == BLOCK)

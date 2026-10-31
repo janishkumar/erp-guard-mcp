@@ -124,3 +124,31 @@ def test_load_scope_path_and_env(tmp_path, monkeypatch):
     assert r.business_modules == frozenset({"Selling"})
     monkeypatch.setenv("ERP_GUARD_SCOPE", str(p))
     assert load_scope() == r
+
+
+META = Path(__file__).parent / "fixtures" / "erpnext" / "meta"
+# Every child-table DocType in the recorded metas (docs after the first are child tables).
+CHILD_TYPES = {d["name"]: d for f in META.glob("*.json")
+               for d in json.loads(f.read_text())["docs"][1:]}
+
+
+@pytest.mark.parametrize("name", ["Purchase Order Item", "Purchase Taxes and Charges",
+                                  "Payment Schedule", "UOM Conversion Detail", "Item Default",
+                                  "Payment Entry Reference"])
+def test_named_child_tables_never_written(rules, name):
+    d = CHILD_TYPES[name]
+    assert d["istable"]
+    for owned in (False, True):  # not even when a pack owns the type
+        assert classify(rules, name, d["module"], False, owned, False,
+                        istable=True) is Scope.NEVER
+
+
+def test_every_recorded_child_table_is_refused(rules):
+    from erp_guard.generic.scope import writable_predicate
+    assert len(CHILD_TYPES) > 20
+    writable = writable_predicate(rules, CHILD_TYPES.__getitem__, lambda d: True)
+    for name, d in CHILD_TYPES.items():
+        assert d["istable"], name
+        assert classify(rules, name, d["module"], bool(d.get("issingle")), False,
+                        bool(d.get("is_submittable")), istable=True) is Scope.NEVER, name
+        assert not writable(name), name

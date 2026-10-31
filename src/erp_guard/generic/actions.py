@@ -25,7 +25,6 @@ from erp_guard.ops import Op, Write
 from erp_guard.service import Action, InvalidArgs, _decimal, _text, canonicaliser
 
 if TYPE_CHECKING:
-    from erp_guard.packs.base import Pack
     from erp_guard.service import Service
 
 Result = tuple[str, list[CheckResult]]
@@ -88,18 +87,17 @@ def meta_of(svc: Service, doctype: str) -> tuple[DocMeta, dict]:
     return doc_meta({"docs": docs}, has_workflow=bool(raw.get("__workflow_docs"))), raw
 
 
-def pack_for(svc: Service, doctype: str) -> Pack | None:
-    return next((p for p in svc.packs if p.owns(doctype)), None)
-
-
 def scope_of(svc: Service, meta: DocMeta) -> Scope:
     return classify(scope_rules(), meta.doctype, meta.module, meta.issingle,
-                    pack_for(svc, meta.doctype) is not None, meta.is_submittable)
+                    svc.pack_owned(meta.doctype), meta.is_submittable, istable=meta.istable)
 
 
 def scope_message(meta: DocMeta, scope: Scope) -> str:
     rules = scope_rules()
     if scope is Scope.NEVER:
+        if meta.istable:
+            return (f"{meta.doctype} is a child table: child rows are written through their "
+                    "parent document.")
         if meta.issingle or meta.module in rules.never_modules or \
                 meta.doctype in rules.never_doctypes:
             return f"{meta.doctype}: system administration is never done through the MCP."
@@ -304,7 +302,7 @@ def evaluate_write(svc: Service, w: Write) -> Result:
     if head.level == BLOCK:
         return _label(w), [head]
     if scope is Scope.PACK:
-        summary, res = pack_for(svc, w.doctype).evaluate_write(svc, w)
+        summary, res = svc.pack_for(w.doctype).evaluate_write(svc, w)
         if w.op in (Op.CREATE, Op.UPDATE, Op.AMEND):
             # The pack builds the full document, so required fields are its business.
             res = res + _field_checks(meta, w.fields, for_create=False, required=False)
@@ -319,7 +317,7 @@ def apply_write(svc: Service, w: Write) -> tuple[str, str]:
     meta, _ = meta_of(svc, w.doctype)
     scope = scope_of(svc, meta)
     if scope is Scope.PACK:
-        return pack_for(svc, w.doctype).apply_write(svc, w)
+        return svc.pack_for(w.doctype).apply_write(svc, w)
     if scope not in (Scope.GENERIC, Scope.LATER):  # evaluate blocks these first
         raise ErpError(scope_message(meta, scope))
     erp = svc.erp

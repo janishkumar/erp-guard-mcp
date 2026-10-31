@@ -37,6 +37,7 @@ class DocMeta:
     has_workflow: bool
     fields: dict[str, FieldMeta]
     children: dict[str, DocMeta] = field(default_factory=dict)  # table fieldname -> child meta
+    istable: bool = False  # a child table: its rows belong to a parent document
 
 
 def _field(f: dict) -> FieldMeta:
@@ -63,6 +64,7 @@ def _build(doc: dict, by_name: dict[str, dict], has_workflow: bool, seen: frozen
         doctype=doc["name"], module=doc.get("module") or "",
         issingle=bool(doc.get("issingle")), is_submittable=bool(doc.get("is_submittable")),
         has_workflow=has_workflow, fields=fields, children=children,
+        istable=bool(doc.get("istable")),
     )
 
 

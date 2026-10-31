@@ -198,7 +198,7 @@ def describe_doctype(doctype: str) -> str:
     def run(svc):
         meta, raw = generic.meta_of(svc, doctype)
         scope = generic.scope_of(svc, meta)
-        pack = generic.pack_for(svc, doctype)
+        pack = svc.pack_for(doctype)
         tools = pack.task_tools.get(doctype, ()) if pack else ()
         return render.doctype(meta, raw, scope, generic.scope_message(meta, scope),
                               svc.erp.roles(), pack.name if pack else None, tools)

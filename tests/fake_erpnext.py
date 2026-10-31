@@ -70,9 +70,15 @@ class FakeErpNext:
 
     def _meta(self, doctype: str) -> httpx.Response:
         f = FIX / "meta" / f"{doctype}.json"
-        if not f.exists():
-            return _not_found(doctype)
-        raw = json.loads(f.read_text())
+        if f.exists():
+            raw = json.loads(f.read_text())
+        else:  # a child table: served from the parent's recorded metadata
+            child = next((d for g in sorted((FIX / "meta").glob("*.json"))
+                          for d in json.loads(g.read_text())["docs"][1:]
+                          if d["name"] == doctype), None)
+            if child is None:
+                return _not_found(doctype)
+            raw = {"docs": [child]}
         raw["docs"][0].update(self.meta_overrides.get(doctype, {}))
         raw["docs"][0]["__workflow_docs"] = (
             [{"doctype": "Workflow", "name": f"{doctype} Approval"}]
@@ -167,10 +173,8 @@ class FakeErpNext:
 
 
 def connector(fake: FakeErpNext, **client_kw) -> ErpNext:
-    """An ErpNext over the fake, with the scope-derived write predicate production uses."""
+    """An ErpNext over the fake. A Service built on it sets the scope-derived write limit,
+    as in production."""
     client = FrappeClient("http://erp.local", "k", "s", transport=httpx.MockTransport(fake),
                           **client_kw)
-    erp = ErpNext(client, "Lakeside Demo Utilities")
-    if "writable" not in client_kw:
-        erp.use_scope()
-    return erp
+    return ErpNext(client, "Lakeside Demo Utilities")

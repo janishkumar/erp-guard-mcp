@@ -279,3 +279,20 @@ def test_audit_doctype_is_create_only():
     c.request("POST", "/api/method/frappe.client.insert",
               body={"doc": {"doctype": "ERP Guard Audit", "action": "x"}})
     assert len(seen) == 2
+
+
+def test_child_rows_never_written_on_their_own():
+    """A child row written by itself skips its parent's checks: refused whatever the write
+    predicate says, through every write path."""
+    seen = []
+    c = _client(seen, writable=lambda d: True)
+    row = {"doctype": "Purchase Order Item", "name": "row1", "parent": "PO-1",
+           "parenttype": "Purchase Order", "parentfield": "items", "qty": 5}
+    for method in ("frappe.client.save", "frappe.client.insert", "frappe.client.submit"):
+        with pytest.raises(HardLimitError, match="through their parent"):
+            c.request("POST", f"/api/method/{method}", body={"doc": row})
+    for verb, path in (("PUT", "/api/resource/Purchase%20Order%20Item/row1"),
+                       ("POST", "/api/resource/Purchase%20Order%20Item")):
+        with pytest.raises(HardLimitError, match="through their parent"):
+            c.request(verb, path, body={"parent": "PO-1", "qty": 5})
+    assert not seen

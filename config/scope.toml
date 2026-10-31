@@ -1,0 +1,109 @@
+# Scope rules for the write tools (docs/design.md, "Scope rules"). Applied in order, the
+# first match decides:
+#   1. [never]   single document types (settings), these modules, these names
+#   2. pack      owned by a pack (decided in code, from the pack's owned set)
+#   3. [later]   owned by a later phase but not ledger-posting: generic writes until then
+#   4. [ledger]  posts to the general or stock ledger, no pack yet: read-only
+#   5. generic   everything else in [business] modules, except that a submittable
+#                document type must be packed, later, ledger or [safe]; one that isn't is
+#                refused. Anything outside [business] modules is refused too.
+# Read tools are not limited by this file. Every name below is checked against the
+# document types of ERPNext v16.52.0 by tests/test_scope.py.
+
+[never]
+modules = [
+    "Core", "Custom", "Desk", "Workflow", "Integrations", "Automation", "Email", "Website",
+    "Printing",
+]
+doctypes = [
+    "Company", "Account", "Fiscal Year", "Cost Center", "Budget", "Authorization Rule",
+    "Bank", "Bank Account", "Mode of Payment", "Payment Gateway Account",
+    "ERP Guard Audit",
+    # Added: deletes a company's transactions in bulk. System administration, not a
+    # business document, though ERPNext files it under Setup.
+    "Transaction Deletion Record",
+]
+
+[later]
+doctypes = ["Customer", "Quotation", "Sales Order", "Project", "Task", "Timesheet", "Employee"]
+
+[ledger]
+doctypes = [
+    # The design's list.
+    "Journal Entry", "Sales Invoice", "POS Invoice", "Delivery Note", "Stock Entry",
+    "Stock Reconciliation", "Asset", "Asset Capitalization", "Asset Value Adjustment",
+    "Landed Cost Voucher", "Payment Request", "Payment Order", "Invoice Discounting",
+    "Period Closing Voucher", "Exchange Rate Revaluation", "Subcontracting Receipt",
+    "Job Card", "Work Order",
+    # Purchase-to-pay documents that post. The pack owns them (rule 2 wins); listed so that
+    # without the pack they are read-only, not generic.
+    "Purchase Receipt", "Purchase Invoice", "Payment Entry",
+    # Added after reading the v16.52.0 controllers: their submit (or cancel) makes GL,
+    # stock-ledger or payment-ledger entries, directly or by creating or reversing documents
+    # that do.
+    "Asset Repair",                     # make_gl_entries, consumes stock
+    "Asset Depreciation Schedule",      # drives depreciation journal entries, cancels them
+    "Asset Shift Allocation",           # creates a new depreciation schedule
+    "POS Closing Entry",                # consolidates POS invoices into sales invoices
+    "POS Invoice Merge Log",            # creates sales invoices and credit notes
+    "Process Deferred Accounting",      # books deferred revenue and expense
+    "Process Period Closing Voucher",   # runs period closing
+    "Process Payment Reconciliation",   # reconciles payments, books exchange gain or loss
+    "Process Subscription",             # creates invoices
+    "Repost Accounting Ledger",         # rewrites GL entries
+    "Repost Payment Ledger",            # rewrites payment-ledger entries
+    "Repost Item Valuation",            # reposts stock valuation and its GL entries
+    "Stock Closing Entry",              # stock closing balances
+    "Unreconcile Payment",              # changes outstanding amounts, cancels journals
+    "Serial and Batch Bundle",          # stock-ledger detail, submitted with its voucher
+    "Bank Transaction",                 # allocates payment entries, sets clearance
+    # Added, ambiguous: they post nothing themselves but move money, commit the company or
+    # change what the ledger or a purchase-to-pay check sees. Read-only until their phase.
+    "Dunning",                          # charges fees and interest to customers
+    "Cashier Closing",                  # cash handover
+    "POS Opening Entry",                # opening cash float
+    "Share Transfer",                   # issues and transfers equity
+    "Bank Guarantee",                   # bank instrument, phase 1 has no bank details
+    "Cost Center Allocation",           # splits every GL posting across cost centres
+    "Blanket Order",                    # agreed rates that flow into purchase orders
+    "Contract",                         # submit signs it for the company
+    "Supplier Scorecard Period",        # scores can stop POs and RFQs to a supplier
+    "Quality Inspection",               # accepts or rejects received goods, writes onto
+                                        # receipt and invoice lines the pack owns
+    "Subcontracting Order",             # updates PO quantities, reserves raw materials
+    "Subcontracting Inward Order",      # updates sales order quantities
+    "Stock Reservation Entry",          # reserves stock in the bin
+    "Pick List",                        # creates serial and batch bundles, reserves stock
+    "Production Plan",                  # updates planned quantities and reservations
+    "BOM",                              # costing master for manufacturing valuation
+    "BOM Creator",                      # creates BOMs
+    "BOM Update Log",                   # replaces BOMs and their costs everywhere
+    "Asset Movement",                   # changes an asset's location and custodian
+    # Added: the ledgers themselves and the tools that rewrite them. Not submittable, so
+    # without this they would fall to rule 5 (generic).
+    "GL Entry", "Payment Ledger Entry", "Advance Payment Ledger Entry",
+    "Stock Ledger Entry", "Account Closing Balance", "Stock Closing Balance", "Bin",
+    "Loyalty Point Entry", "Ledger Merge", "Bank Statement Import",
+]
+
+# Submittable business document types reviewed in the v16.52.0 code: submitting posts
+# nothing to any ledger, moves no money and approves nothing.
+[safe]
+doctypes = [
+    "Installation Note",                # marks delivered serial numbers installed
+    "Maintenance Visit",                # records a service visit, updates a warranty claim
+    "Maintenance Schedule",             # plans visits as calendar events, sets AMC dates
+    "Asset Maintenance Log",            # completes a maintenance task, sets its next date
+    "Delivery Trip",                    # route and stops for deliveries, own status only
+    "Packing Slip",                     # packed quantities on a delivery note
+    "Shipment",                         # parcels and addresses, own status only
+    "Project Update",                   # progress note, no submit hooks
+    "Sales Forecast",                   # demand quantities for planning, no submit hooks
+]
+
+[business]
+modules = [
+    "Buying", "Selling", "Stock", "Accounts", "Projects", "CRM", "Support",
+    "Quality Management", "Maintenance", "Manufacturing", "Assets", "Subcontracting",
+    "Contacts", "Setup",
+]

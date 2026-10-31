@@ -47,6 +47,7 @@ packages = ["src/erp_guard"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "config/policy.toml" = "erp_guard/policy.toml"
+"config/scope.toml" = "erp_guard/scope.toml"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/erp_guard", "config", "tests", "README.md", "LICENSE"]

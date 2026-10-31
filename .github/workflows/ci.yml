@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    env:
+      PYTHONPATH: src:tests:.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.14"
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Lint
+        run: uv run ruff check src tests scripts evals
+      # Includes tests/test_evals.py: the guardrail eval on the in-memory ERP, which fails
+      # the build if any unsafe write lands beyond the known, documented miss.
+      - name: Test (in-memory ERP and SAP fixtures, no network)
+        run: uv run pytest -m "not live" --cov=po_guard --cov-report=term-missing --cov-fail-under=80
+      - name: Wheel installs and imports cleanly
+        run: |
+          uv build --wheel
+          uv run --isolated --no-project --with dist/*.whl python -c \
+            "import po_guard.server, po_guard.connectors.erpnext, po_guard.connectors.sap; print('ok')"
+      - name: Dependency audit (advisory)
+        if: matrix.python == '3.12'
+        run: |
+          uv export --frozen --no-dev --no-hashes --no-emit-project > requirements.lock.txt
+          uvx pip-audit --progress-spinner off -r requirements.lock.txt \
+            || echo "::warning::pip-audit reported vulnerable dependencies"
+
+  live-erpnext:
+    # The same integration tests and eval as `make test-live` / `make eval-live`, against
+    # a throwaway ERPNext in the runner. Manual, since a cold ERPNext takes ~10 minutes.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: src:tests:.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.14"
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: make up seed
+      - run: uv run pytest -m live -v
+      - run: make reset up seed && uv run python -m evals.run --erp erpnext
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

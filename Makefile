@@ -20,7 +20,8 @@ test-live:       ## integration tests against the local ERPNext (make up && make
 
 up:              ## start ERPNext v16 locally on http://localhost:8080 (~4 GB RAM)
 	$(COMPOSE) up -d
-	@echo "waiting for ERPNext..."
+	@echo "waiting for ERPNext (a brand-new site takes ~5 minutes to install)..."
+	@$(COMPOSE) wait create-site >/dev/null
 	@until curl -sf http://localhost:8080/api/method/ping >/dev/null; do sleep 3; done
 	@echo "ERPNext is up. First time? run: make seed"
 

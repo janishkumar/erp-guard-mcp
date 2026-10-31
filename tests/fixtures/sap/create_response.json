@@ -1,0 +1,40 @@
+{
+ "@odata.etag": "W/\"SADL-4500000201\"",
+ "PurchaseOrder": "4500000201",
+ "PurchaseOrderType": "NB",
+ "CompanyCode": "1010",
+ "PurchasingOrganization": "1010",
+ "PurchasingGroup": "001",
+ "Supplier": "17300001",
+ "DocumentCurrency": "USD",
+ "PurchaseOrderDate": "2026-10-30",
+ "CreatedByUser": "CB9980000010",
+ "PurchasingProcessingStatus": "01",
+ "ReleaseIsNotCompleted": true,
+ "PurchaseOrderDeletionCode": "",
+ "_PurchaseOrderItem": [
+  {
+   "PurchaseOrder": "4500000201",
+   "PurchaseOrderItem": "00010",
+   "Material": "TG11",
+   "PurchaseOrderItemText": "Tg11",
+   "OrderQuantity": 4,
+   "PurchaseOrderQuantityUnit": "EA",
+   "NetPriceAmount": "46",
+   "DocumentCurrency": "USD",
+   "Plant": "1010",
+   "AccountAssignmentCategory": "K",
+   "PurchasingDocumentDeletionCode": "",
+   "@odata.etag": "W/\"SADL-4500000201-10\"",
+   "_PurOrdAccountAssignment": [
+    {
+     "PurchaseOrder": "4500000201",
+     "PurchaseOrderItem": "00010",
+     "AccountAssignmentNumber": "01",
+     "CostCenter": "10101101",
+     "GLAccount": "61008000"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+{
+ "d": {
+  "results": [
+   {
+    "Supplier": "17300001",
+    "SupplierName": "Domestic US Supplier 1",
+    "TaxNumber1": "",
+    "PostingIsBlocked": false,
+    "PurchasingIsBlocked": false,
+    "DeletionIndicator": false
+   },
+   {
+    "Supplier": "17300002",
+    "SupplierName": "HERC RENTALS INC",
+    "TaxNumber1": "36-1111111",
+    "PostingIsBlocked": false,
+    "PurchasingIsBlocked": false,
+    "DeletionIndicator": false
+   },
+   {
+    "Supplier": "17300003",
+    "SupplierName": "Blocked Vendor Co",
+    "TaxNumber1": "",
+    "PostingIsBlocked": false,
+    "PurchasingIsBlocked": true,
+    "DeletionIndicator": false
+   }
+  ]
+ }
+}

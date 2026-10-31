@@ -10,4 +10,3 @@ dist/
 .DS_Store
 requirements.lock.txt
 audit/*.jsonl
-evals/results/*.live.json

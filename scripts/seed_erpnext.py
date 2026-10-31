@@ -102,9 +102,10 @@ class Admin:
             self.insert(doc)
 
 
-def setup_wizard(a: Admin) -> None:
+def setup_wizard(a: Admin) -> bool:
+    """Complete the wizard if needed; True if this run did it (a brand-new site)."""
     if a.get_list("Company", ["name"]):
-        return
+        return False
     print("completing setup wizard (a minute or two)...")
     args = {"language": "English", "country": "United States", "timezone": "America/Chicago",
             "currency": "USD", "full_name": "Administrator", "company_name": COMPANY,
@@ -113,6 +114,7 @@ def setup_wizard(a: Admin) -> None:
             "setup_demo": 0}
     a.call("POST", "/api/method/frappe.desk.page.setup_wizard.setup_wizard.setup_complete",
            json={"args": args})
+    return True
 
 
 def custom_fields(a: Admin) -> None:
@@ -178,9 +180,11 @@ def masters(a: Admin) -> None:
     print(f"suppliers: {len(rows)} in seed file")
 
 
-def _works(kv: tuple[str, str]) -> bool:
-    r = _client(kv).get("/api/method/frappe.auth.get_logged_user")
-    return r.status_code == 200
+def _works(kv: tuple[str, str], tries: int = 8) -> bool:
+    # Several calls, so they land on different gunicorn workers.
+    c = _client(kv)
+    return all(c.get("/api/method/frappe.auth.get_logged_user").status_code == 200
+               for _ in range(tries))
 
 
 def _restart_backend() -> None:
@@ -295,7 +299,11 @@ def write_env(keys: dict[str, tuple[str, str]]) -> None:
 
 def main() -> None:
     a = Admin()
-    setup_wizard(a)
+    if setup_wizard(a):
+        # Make sure the key the wizard saved is the one every worker uses before any API
+        # secret is encrypted with it (see _restart_backend).
+        _restart_backend()
+        a = Admin()
     custom_fields(a)
     audit_doctype(a)
     masters(a)

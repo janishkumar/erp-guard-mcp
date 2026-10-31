@@ -1,0 +1,188 @@
+{
+ "@odata.context": "$metadata#PurchaseOrder(_PurchaseOrderItem(_PurOrdAccountAssignment()))",
+ "value": [
+  {
+   "@odata.etag": "W/\"SADL-4500000101\"",
+   "PurchaseOrder": "4500000101",
+   "PurchaseOrderType": "NB",
+   "CompanyCode": "1010",
+   "PurchasingOrganization": "1010",
+   "PurchasingGroup": "001",
+   "Supplier": "17300001",
+   "DocumentCurrency": "USD",
+   "PurchaseOrderDate": "2026-09-14",
+   "CreatedByUser": "CB9980000010",
+   "PurchasingProcessingStatus": "05",
+   "ReleaseIsNotCompleted": false,
+   "PurchaseOrderDeletionCode": "",
+   "_PurchaseOrderItem": [
+    {
+     "PurchaseOrder": "4500000101",
+     "PurchaseOrderItem": "00010",
+     "Material": "TG11",
+     "PurchaseOrderItemText": "Tg11",
+     "OrderQuantity": 20,
+     "PurchaseOrderQuantityUnit": "EA",
+     "NetPriceAmount": "45.5",
+     "DocumentCurrency": "USD",
+     "Plant": "1010",
+     "AccountAssignmentCategory": "K",
+     "PurchasingDocumentDeletionCode": "",
+     "@odata.etag": "W/\"SADL-4500000101-10\"",
+     "_PurOrdAccountAssignment": [
+      {
+       "PurchaseOrder": "4500000101",
+       "PurchaseOrderItem": "00010",
+       "AccountAssignmentNumber": "01",
+       "CostCenter": "10101101",
+       "GLAccount": "61008000"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "@odata.etag": "W/\"SADL-4500000102\"",
+   "PurchaseOrder": "4500000102",
+   "PurchaseOrderType": "NB",
+   "CompanyCode": "1010",
+   "PurchasingOrganization": "1010",
+   "PurchasingGroup": "001",
+   "Supplier": "17300001",
+   "DocumentCurrency": "USD",
+   "PurchaseOrderDate": "2026-10-20",
+   "CreatedByUser": "CB9980000011",
+   "PurchasingProcessingStatus": "03",
+   "ReleaseIsNotCompleted": true,
+   "PurchaseOrderDeletionCode": "",
+   "_PurchaseOrderItem": [
+    {
+     "PurchaseOrder": "4500000102",
+     "PurchaseOrderItem": "00010",
+     "Material": "TG11",
+     "PurchaseOrderItemText": "Tg11",
+     "OrderQuantity": 10,
+     "PurchaseOrderQuantityUnit": "EA",
+     "NetPriceAmount": "47",
+     "DocumentCurrency": "USD",
+     "Plant": "1010",
+     "AccountAssignmentCategory": "K",
+     "PurchasingDocumentDeletionCode": "",
+     "@odata.etag": "W/\"SADL-4500000102-10\"",
+     "_PurOrdAccountAssignment": [
+      {
+       "PurchaseOrder": "4500000102",
+       "PurchaseOrderItem": "00010",
+       "AccountAssignmentNumber": "01",
+       "CostCenter": "10101101",
+       "GLAccount": "61008000"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "@odata.etag": "W/\"SADL-4500000103\"",
+   "PurchaseOrder": "4500000103",
+   "PurchaseOrderType": "NB",
+   "CompanyCode": "1010",
+   "PurchasingOrganization": "1010",
+   "PurchasingGroup": "001",
+   "Supplier": "17300002",
+   "DocumentCurrency": "USD",
+   "PurchaseOrderDate": "2026-10-22",
+   "CreatedByUser": "CB9980000010",
+   "PurchasingProcessingStatus": "02",
+   "ReleaseIsNotCompleted": false,
+   "PurchaseOrderDeletionCode": "",
+   "_PurchaseOrderItem": [
+    {
+     "PurchaseOrder": "4500000103",
+     "PurchaseOrderItem": "00010",
+     "Material": "TG12",
+     "PurchaseOrderItemText": "Tg12",
+     "OrderQuantity": 5,
+     "PurchaseOrderQuantityUnit": "EA",
+     "NetPriceAmount": "1200",
+     "DocumentCurrency": "USD",
+     "Plant": "1010",
+     "AccountAssignmentCategory": "K",
+     "PurchasingDocumentDeletionCode": "",
+     "@odata.etag": "W/\"SADL-4500000103-10\"",
+     "_PurOrdAccountAssignment": [
+      {
+       "PurchaseOrder": "4500000103",
+       "PurchaseOrderItem": "00010",
+       "AccountAssignmentNumber": "01",
+       "CostCenter": "10101102",
+       "GLAccount": "61008000"
+      }
+     ]
+    },
+    {
+     "PurchaseOrder": "4500000103",
+     "PurchaseOrderItem": "00020",
+     "Material": "TG13",
+     "PurchaseOrderItemText": "Tg13",
+     "OrderQuantity": 2,
+     "PurchaseOrderQuantityUnit": "EA",
+     "NetPriceAmount": "300",
+     "DocumentCurrency": "USD",
+     "Plant": "1010",
+     "AccountAssignmentCategory": "K",
+     "PurchasingDocumentDeletionCode": "",
+     "@odata.etag": "W/\"SADL-4500000103-20\"",
+     "_PurOrdAccountAssignment": [
+      {
+       "PurchaseOrder": "4500000103",
+       "PurchaseOrderItem": "00020",
+       "AccountAssignmentNumber": "01",
+       "CostCenter": "10101102",
+       "GLAccount": "61008000"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "@odata.etag": "W/\"SADL-4500000104\"",
+   "PurchaseOrder": "4500000104",
+   "PurchaseOrderType": "NB",
+   "CompanyCode": "1010",
+   "PurchasingOrganization": "1010",
+   "PurchasingGroup": "001",
+   "Supplier": "17300002",
+   "DocumentCurrency": "USD",
+   "PurchaseOrderDate": "2026-10-01",
+   "CreatedByUser": "CB9980000010",
+   "PurchasingProcessingStatus": "02",
+   "ReleaseIsNotCompleted": false,
+   "PurchaseOrderDeletionCode": "",
+   "_PurchaseOrderItem": [
+    {
+     "PurchaseOrder": "4500000104",
+     "PurchaseOrderItem": "00010",
+     "Material": "TG12",
+     "PurchaseOrderItemText": "Tg12",
+     "OrderQuantity": 1,
+     "PurchaseOrderQuantityUnit": "EA",
+     "NetPriceAmount": "1150",
+     "DocumentCurrency": "USD",
+     "Plant": "1010",
+     "AccountAssignmentCategory": "K",
+     "PurchasingDocumentDeletionCode": "L",
+     "@odata.etag": "W/\"SADL-4500000104-10\"",
+     "_PurOrdAccountAssignment": [
+      {
+       "PurchaseOrder": "4500000104",
+       "PurchaseOrderItem": "00010",
+       "AccountAssignmentNumber": "01",
+       "CostCenter": "10101102",
+       "GLAccount": "61008000"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

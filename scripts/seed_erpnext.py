@@ -294,6 +294,32 @@ def bank(a: Admin) -> None:
                json={"accounts": [row]})
 
 
+# Read access the design's roles lack in ERPNext but need for their own work:
+# (doctype, role). A receipt reads the company's accounts; submitting an invoice reads its
+# items; invoicing and approving invoices read the order and receipt they match.
+READ_GRANTS = [("Account", "Stock User"), ("Item", "Accounts Manager"),
+               ("Purchase Order", "Accounts User"), ("Purchase Order", "Accounts Manager"),
+               ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager")]
+_PERMS = "frappe.core.page.permission_manager.permission_manager"
+
+
+def read_grants(a: Admin) -> None:
+    """Add each read permission with ERPNext's permission manager (which first copies the
+    doctype's standard permissions into Custom DocPerm), unless the role already reads."""
+    for doctype, role in READ_GRANTS:
+        rules = a.call("POST", f"/api/method/{_PERMS}.get_permissions",
+                       json={"doctype": doctype})["message"]
+        if any(r["role"] == role and r["permlevel"] == 0 and r["read"] for r in rules):
+            continue
+        if any(r["role"] == role and r["permlevel"] == 0 for r in rules):  # a rule, no read
+            a.call("POST", f"/api/method/{_PERMS}.update",
+                   json={"doctype": doctype, "role": role, "permlevel": 0, "ptype": "read",
+                         "value": 1})
+        else:  # a new rule, with read
+            a.call("POST", f"/api/method/{_PERMS}.add",
+                   json={"parent": doctype, "role": role, "permlevel": 0})
+
+
 def _works(kv: tuple[str, str], tries: int = 8) -> bool:
     # Several calls, so they land on different gunicorn workers.
     c = _client(kv)
@@ -438,17 +464,18 @@ def history_documents(a: Admin) -> None:
     print("history: 6 receipts, 4 invoices, 2 payments")
 
 
-# Approval workflows: doctype -> (role that submits for approval and revises, role that
-# approves and rejects, active). Who may approve what, and up to how much, is erp-guard's
+# Approval workflows: doctype -> (role that submits for approval and revises, roles that
+# approve and reject, active). Who may approve what, and up to how much, is erp-guard's
 # policy (config/policy.toml); these roles only let the right people apply transitions.
-# The purchase order's workflow starts inactive: v1's order approval still uses the
-# erp_guard_status field until it moves onto the workflow.
+# Invoices: the controller (Accounts Manager), and the director as backup (Purchase
+# Manager; policy refuses the manager). The purchase order's workflow starts inactive: v1's
+# order approval still uses the erp_guard_status field until it moves onto the workflow.
 WORKFLOWS = {
-    "Material Request": ("Purchase User", "Purchase Manager", True),
-    "Purchase Order": ("Purchase User", "Purchase Manager", False),
-    "Purchase Invoice": ("Accounts User", "Accounts Manager", True),
-    "Payment Entry": ("Accounts User", "Purchase Manager", True),
-    CHANGE_REQUEST: ("Purchase User", "Purchase Manager", True),
+    "Material Request": ("Purchase User", ("Purchase Manager",), True),
+    "Purchase Order": ("Purchase User", ("Purchase Manager",), False),
+    "Purchase Invoice": ("Accounts User", ("Accounts Manager", "Purchase Manager"), True),
+    "Payment Entry": ("Accounts User", ("Purchase Manager",), True),
+    CHANGE_REQUEST: ("Purchase User", ("Purchase Manager",), True),
 }
 STATES = [("Draft", 0), ("Pending Approval", 0), ("Approved", 1), ("Rejected", 0),
           ("Cancelled", 2)]
@@ -464,19 +491,20 @@ def workflows(a: Admin) -> None:
         a.ensure({"doctype": "Workflow State", "workflow_state_name": state}, state)
     for _, action, _, _ in TRANSITIONS:
         a.ensure({"doctype": "Workflow Action Master", "workflow_action_name": action}, action)
-    for doctype, (submitter, approver, active) in WORKFLOWS.items():
-        # The submitter edits drafts and rejected documents, the approver the rest.
+    for doctype, (submitter, approvers, active) in WORKFLOWS.items():
+        # The submitter edits drafts and rejected documents, the (first) approver the rest.
         edits = {"Draft": submitter, "Rejected": submitter}
+        approver = approvers[0]
         a.ensure({
             "doctype": "Workflow", "workflow_name": f"{doctype} Approval",
             "document_type": doctype, "is_active": int(active), "override_status": 0,
             "send_email_alert": 0, "workflow_state_field": "workflow_state",
             "states": [{"state": st, "doc_status": str(ds),
                         "allow_edit": edits.get(st, approver)} for st, ds in STATES],
-            "transitions": [{"state": st, "action": act, "next_state": nxt,
-                             "allowed": approver if by_approver else submitter,
+            "transitions": [{"state": st, "action": act, "next_state": nxt, "allowed": role,
                              "allow_self_approval": 1}
-                            for st, act, nxt, by_approver in TRANSITIONS],
+                            for st, act, nxt, by_approver in TRANSITIONS
+                            for role in (approvers if by_approver else (submitter,))],
         }, f"{doctype} Approval")
     print(f"workflows: {len(WORKFLOWS)}")
 
@@ -515,6 +543,7 @@ def main() -> None:
     audit_doctype(a)
     change_request_doctype(a)
     masters(a)
+    read_grants(a)
     keys = users(a)
     write_env(keys)
     history(keys)

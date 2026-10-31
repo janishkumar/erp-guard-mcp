@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import date, timedelta
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -17,7 +18,7 @@ from erp_guard import demo
 from erp_guard.connectors.erpnext import ErpNext, HardLimitError
 from erp_guard.env import load_env
 from erp_guard.generic.actions import meta_of
-from erp_guard.models import Status
+from erp_guard.models import Line, Status
 from erp_guard.policy import load_policy
 from erp_guard.service import Service
 
@@ -217,6 +218,14 @@ def test_live_workflows_exist():
                          ("REQUESTER", "ERP Guard Change Request")):
         assert meta_of(svc(tag), doctype)[0].has_workflow, doctype
     assert not meta_of(svc("REQUESTER"), "Purchase Order")[0].has_workflow
+    # Only System Manager reads Workflow records: the seed's local Administrator login.
+    admin = httpx.Client(base_url=URL, timeout=60)
+    admin.post("/api/method/login", json={"usr": "Administrator", "pwd": "admin"})
+    po_flow = admin.get("/api/resource/Workflow/Purchase Order Approval").json()["data"]
+    assert (po_flow["document_type"], po_flow["is_active"]) == ("Purchase Order", 0)
+    pi_flow = svc("AP").erp.get_meta("Purchase Invoice")["__workflow_docs"][0]
+    assert {t["allowed"] for t in pi_flow["transitions"] if t["action"] == "Approve"} == {
+        "Accounts Manager", "Purchase Manager"}
     req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
     when = (date.today() + timedelta(days=14)).isoformat()
     mr = req.insert({"doctype": "Material Request", "material_request_type": "Purchase",
@@ -287,3 +296,23 @@ def test_live_stock_flags():
         assert item["is_stock_item"] == int(stock), code
         warehouses = [(d["company"], d.get("default_warehouse")) for d in item["item_defaults"]]
         assert warehouses == ([(demo.COMPANY, demo.WAREHOUSE)] if stock else []), code
+
+
+def test_live_read_grants(created):
+    """The seed's narrow read grants let each role do its own part: the receiver records
+    a receipt against an approved order, AP reads the order and drafts its invoice, the
+    controller reads items. The receipt is cancelled and the order with it."""
+    req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
+    o = req.create_order("TRANE U.S. INC", CC, [Line("PAPER-A4", Decimal(1), Decimal(42))],
+                         "live read grants", date.today() + timedelta(days=14))
+    created.append(o.id)
+    mgr.approve_order(o.id)
+    rcv = svc("RECEIVER").erp
+    pr = rcv.insert(rcv.map_doc("Purchase Order", o.id, "Purchase Receipt"))
+    assert rcv.submit("Purchase Receipt", pr["name"])["docstatus"] == 1
+    assert rcv.cancel("Purchase Receipt", pr["name"])["docstatus"] == 2
+    ap = svc("AP").erp
+    assert ap.get_doc("Purchase Order", o.id)["name"] == o.id
+    draft = ap.map_doc("Purchase Order", o.id, "Purchase Invoice")
+    assert [i["item_code"] for i in draft["items"]] == ["PAPER-A4"]
+    assert svc("CONTROLLER").erp.get_doc("Item", "PAPER-A4")["is_stock_item"] == 1

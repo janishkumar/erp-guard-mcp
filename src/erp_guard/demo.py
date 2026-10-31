@@ -44,25 +44,24 @@ WAREHOUSE = f"Stores - {ABBR}"
 BANK_ACCOUNT = f"Demo Operating Bank - {ABBR}"
 MODE_OF_PAYMENT = "Bank Transfer"
 
-_REQUESTER = ["Purchase User", "Purchase Master Manager",
+_REQUESTER = ("Purchase User", "Purchase Master Manager",
               # Task is a later-phase type the generic tools write (live generic test).
-              "Projects User"]
-_APPROVER = ["Purchase User", "Purchase Master Manager", "Purchase Manager",
+              "Projects User")
+_APPROVER = ("Purchase User", "Purchase Master Manager", "Purchase Manager",
              # ERPNext submits a document as the user who applies the workflow transition,
              # and submitting a Payment Entry needs an Accounts role.
-             "Accounts User"]
+             "Accounts User")
 # Local test accounts: email -> (tag for the ERPNEXT_KEY_<tag> keys in .env, ERPNext
-# roles). Who may approve what is decided by config/policy.toml, not by these roles.
+# roles). Who may approve what is decided by config/policy.toml, not by these roles. The
+# seed adds a few read permissions these roles lack in ERPNext (see READ_GRANTS there).
 USERS: dict[str, tuple[str, list[str]]] = {
-    "requester@example.com": ("REQUESTER", _REQUESTER),
-    "requester2@example.com": ("REQUESTER2", _REQUESTER),
-    "manager@example.com": ("MANAGER", _APPROVER),
-    "director@example.com": ("DIRECTOR", _APPROVER),
-    # + Auditor (read-only): a receipt reads the company's accounts, which Stock User can't.
-    "receiver@example.com": ("RECEIVER", ["Stock User", "Auditor"]),
+    "requester@example.com": ("REQUESTER", list(_REQUESTER)),
+    "requester2@example.com": ("REQUESTER2", list(_REQUESTER)),
+    "manager@example.com": ("MANAGER", list(_APPROVER)),
+    "director@example.com": ("DIRECTOR", list(_APPROVER)),
+    "receiver@example.com": ("RECEIVER", ["Stock User"]),
     "ap@example.com": ("AP", ["Accounts User"]),
-    # + Accounts User: submitting an invoice reads its Items, which Accounts Manager can't.
-    "controller@example.com": ("CONTROLLER", ["Accounts Manager", "Accounts User"]),
+    "controller@example.com": ("CONTROLLER", ["Accounts Manager"]),
     "treasury@example.com": ("TREASURY", ["Accounts User"]),
 }
 

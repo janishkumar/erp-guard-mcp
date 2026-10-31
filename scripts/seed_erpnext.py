@@ -192,8 +192,9 @@ def _restart_backend() -> None:
     # before the first one is written to site_config.json, so a freshly generated API
     # secret fails to decrypt. A restart makes them all read the saved key.
     print("restarting the ERPNext backend once (fresh-site encryption key)...")
+    # The frontend (nginx) resolves the backend's address once, so restart it too.
     subprocess.run(["docker", "compose", "-f", str(ROOT / "docker/compose.yml"), "restart",
-                    "backend"], check=True, capture_output=True)
+                    "backend", "frontend"], check=True, capture_output=True)
     for _ in range(60):
         try:
             if httpx.get(f"{URL}/api/method/ping", timeout=3).status_code == 200:

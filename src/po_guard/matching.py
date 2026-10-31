@@ -168,6 +168,10 @@ def accept_pair(a: str, b: str, cfg: MatchConfig) -> tuple[bool, float]:
     return ratio >= cfg.ratio_min and tokens_compatible(a, b), ratio
 
 
+def _prefilter_score(a: str, b: str, **_) -> float:
+    return max(fuzz.token_set_ratio(a, b), fuzz.ratio(a.replace(" ", ""), b.replace(" ", "")))
+
+
 @dataclass(frozen=True)
 class NameMatch:
     supplier_id: str
@@ -187,8 +191,9 @@ def match_supplier_name(name: str, master: list[tuple[str, str]], warn_ratio: fl
     if not norm or not master:
         return []
     normed = [normalise_name(n) for _, n in master]
-    # Cheap pre-filter, then the guarded rule on the survivors.
-    hits = process.extract(norm, normed, scorer=fuzz.token_set_ratio, limit=25,
+    # Cheap pre-filter, then the guarded rule on the survivors. The second score catches a
+    # lost or extra space ("UNISONCONSULTING"), which token-set scoring rates badly.
+    hits = process.extract(norm, normed, scorer=_prefilter_score, limit=25,
                            score_cutoff=min(warn_ratio, cfg.ratio_min) - 10)
     out: list[NameMatch] = []
     for cand, score, idx in hits:

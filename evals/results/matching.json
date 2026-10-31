@@ -1,0 +1,58 @@
+{
+  "n_variants": 197,
+  "block": 147,
+  "warn": 47,
+  "miss": 3,
+  "wrong_match": 0,
+  "blocked_pct": 74.6,
+  "caught_pct": 98.5,
+  "by_kind": {
+    "suffix": {
+      "block": 36,
+      "warn": 0,
+      "miss": 0,
+      "wrong_match": 0
+    },
+    "punctuation": {
+      "block": 38,
+      "warn": 0,
+      "miss": 0,
+      "wrong_match": 0
+    },
+    "dropped": {
+      "block": 24,
+      "warn": 20,
+      "miss": 0,
+      "wrong_match": 0
+    },
+    "doubled": {
+      "block": 25,
+      "warn": 13,
+      "miss": 0,
+      "wrong_match": 0
+    },
+    "swapped": {
+      "block": 24,
+      "warn": 14,
+      "miss": 3,
+      "wrong_match": 0
+    }
+  },
+  "examples": [
+    {
+      "master": "AIRGAS USA LLC",
+      "variant": "AIRGAS US ALLC",
+      "result": "miss"
+    },
+    {
+      "master": "STUDIO ORD INC",
+      "variant": "STUDIO ORDI NC",
+      "result": "miss"
+    },
+    {
+      "master": "CARE PLUS LLC",
+      "variant": "CARE LPUS LLC",
+      "result": "miss"
+    }
+  ]
+}

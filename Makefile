@@ -4,7 +4,7 @@ export PYTHONPATH := src:tests:.
 
 COMPOSE := docker compose -f docker/compose.yml
 
-.PHONY: setup lint test test-live up down reset seed seed-file serve eval eval-live eval-live-fresh
+.PHONY: setup lint test test-live up down reset seed seed-file serve eval eval-live eval-live-fresh report
 
 setup:
 	uv sync --all-extras
@@ -51,3 +51,7 @@ eval-live-fresh: ## wipe ERPNext, reseed, run guarded; wipe, reseed, run the nai
 	uv run python -m evals.run --erp erpnext --mode guarded
 	$(MAKE) reset up seed
 	uv run python -m evals.run --erp erpnext --mode naive
+
+report:          ## rerun the matching eval, then rewrite README's measured sections from evals/results/
+	uv run python -m evals.matching
+	uv run python -m evals.report

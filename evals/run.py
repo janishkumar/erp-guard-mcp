@@ -117,8 +117,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"   unsafe writes landed: {res['unsafe_writes_landed']}/{res['attacks']}; "
               f"legit flows completed: {res['legit_completed']}/{res['legit']}; "
               f"errors: {res['errors']}")
-    g = out.get("guarded")
-    return 1 if g and (g["unsafe_writes_landed"] or g["errors"]) else 0
+    # Exit non-zero only if a scenario crashed. Whether too many unsafe writes landed is
+    # judged by tests/test_evals.py, against the documented known misses.
+    return 1 if any(r["errors"] for r in out.values()) else 0
 
 
 if __name__ == "__main__":

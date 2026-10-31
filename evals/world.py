@@ -20,7 +20,8 @@ from erp_guard.service import Service
 
 REQ, REQ2 = "requester@example.com", "requester2@example.com"
 MGR, DIR = "manager@example.com", "director@example.com"
-TAGS = {REQ: "REQUESTER", REQ2: "REQUESTER2", MGR: "MANAGER", DIR: "DIRECTOR"}
+# Each demo user's tag for its ERPNEXT_KEY_<tag> keys in .env.
+TAGS = {email: tag for email, (tag, _) in demo.USERS.items()}
 FAKE_CODE = "ABCD2345"
 _CODE = re.compile(r"Confirmation code: `([A-Z0-9]+)`")
 

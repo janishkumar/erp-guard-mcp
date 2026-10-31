@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import date, timedelta
 
 import httpx
 import pytest
 
+from erp_guard import demo
 from erp_guard.connectors.erpnext import ErpNext, HardLimitError
 from erp_guard.env import load_env
 from erp_guard.generic.actions import meta_of
@@ -187,3 +189,101 @@ def test_live_child_row_not_written_on_its_own():
                           body={"qty": 999})
     after = req.erp.get_doc("Purchase Order", po["name"])["items"][0]
     assert after["qty"] == row["qty"] and after["modified"] == row["modified"]
+
+
+# --- seed v2: purchase-to-pay users, workflows, stock items, history -------------------
+
+def test_live_users_and_roles():
+    """Every demo user's key resolves to that user, holding exactly its roles from
+    demo.USERS, and each new user can write to the audit trail (a refused write is audited
+    as that user)."""
+    for email, (tag, roles) in demo.USERS.items():
+        s = svc(tag)
+        assert s.actor == email
+        assert set(s.erp.roles()) == set(roles), email
+    for tag in ("RECEIVER", "AP", "CONTROLLER", "TREASURY"):
+        s = svc(tag)
+        assert s.execute("create_purchase_order", _po(), None).outcome == "refused"
+        last = s.erp.read_audit(limit=1)[0]
+        assert (last.actor, last.outcome) == (s.actor, "refused")
+
+
+def test_live_workflows_exist():
+    """Material requests, invoices, payments and change requests run on active workflows;
+    the purchase order's is created inactive (its approval moves onto it later). A fresh
+    draft request goes Draft -> Pending Approval -> Approved, then is cancelled."""
+    for tag, doctype in (("REQUESTER", "Material Request"), ("AP", "Purchase Invoice"),
+                         ("TREASURY", "Payment Entry"),
+                         ("REQUESTER", "ERP Guard Change Request")):
+        assert meta_of(svc(tag), doctype)[0].has_workflow, doctype
+    assert not meta_of(svc("REQUESTER"), "Purchase Order")[0].has_workflow
+    req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
+    when = (date.today() + timedelta(days=14)).isoformat()
+    mr = req.insert({"doctype": "Material Request", "material_request_type": "Purchase",
+                     "company": req.company, "schedule_date": when,
+                     "items": [{"item_code": "PAPER-A4", "qty": 1, "schedule_date": when}]})
+    assert mr["workflow_state"] == "Draft"
+    assert req.transitions("Material Request", mr["name"]) == ["Submit for Approval"]
+    req.apply_workflow("Material Request", mr["name"], "Submit for Approval")
+    assert req.transitions("Material Request", mr["name"]) == []
+    assert sorted(mgr.transitions("Material Request", mr["name"])) == ["Approve", "Reject"]
+    done = mgr.apply_workflow("Material Request", mr["name"], "Approve")
+    assert (done["workflow_state"], done["docstatus"]) == ("Approved", 1)
+    mgr.cancel("Material Request", mr["name"])
+    # A plain cancel skips validation in Frappe v16, so the workflow state isn't moved to
+    # Cancelled: docstatus is what says a document is cancelled.
+    assert mgr.get_doc("Material Request", mr["name"])["docstatus"] == 2
+
+
+def test_live_history_documents():
+    """Of the 13 approved history orders, six have a submitted receipt, four of those a
+    submitted invoice and two of those a submitted payment from the company bank."""
+    erp = ErpNext.from_env("DIRECTOR")
+    hist = [p["name"] for p in erp.find(
+        "Purchase Order", [["erp_guard_notes", "=", "Seed history (synthetic)."]],
+        ["name", "docstatus", "workflow_state"], limit=0)
+        if (p["docstatus"], p["workflow_state"]) == (1, "Approved")]
+    assert len(hist) == 13
+    receipts = {r["name"] for r in erp.find(
+        "Purchase Receipt", [["docstatus", "=", 1],
+                             ["Purchase Receipt Item", "purchase_order", "in", hist]],
+        ["name"], limit=0)}
+    assert len(receipts) == 6
+    invoices = erp.find("Purchase Invoice", [["docstatus", "=", 1],
+                                             ["bill_no", "like", "HIST-INV-%"]],
+                        ["name", "bill_no", "workflow_state", "outstanding_amount"], limit=0)
+    assert sorted(i["bill_no"] for i in invoices) == [f"HIST-INV-{n}" for n in (1, 2, 3, 4)]
+    assert {i["workflow_state"] for i in invoices} == {"Approved"}
+    for i in invoices:
+        rows = erp.get_doc("Purchase Invoice", i["name"])["items"]
+        assert {r["purchase_receipt"] for r in rows} <= receipts
+    names = [i["name"] for i in invoices]
+    payments = erp.find("Payment Entry", [
+        ["docstatus", "=", 1], ["Payment Entry Reference", "reference_name", "in", names]],
+        ["name", "paid_from", "bank_account", "mode_of_payment", "workflow_state"], limit=0)
+    assert len(payments) == 2
+    for p in payments:
+        assert (p["paid_from"], p["bank_account"], p["mode_of_payment"],
+                p["workflow_state"]) == (demo.BANK_ACCOUNT, None, demo.MODE_OF_PAYMENT,
+                                         "Approved")
+    assert sorted(float(i["outstanding_amount"]) == 0 for i in invoices) == [
+        False, False, True, True]
+    treasury = ErpNext.from_env("TREASURY")
+    acc = treasury.get_doc("Account", demo.BANK_ACCOUNT)
+    assert (acc["account_type"], acc["parent_account"], acc["is_group"]) == (
+        "Bank", f"Bank Accounts - {demo.ABBR}", 0)
+    mop = treasury.get_doc("Mode of Payment", demo.MODE_OF_PAYMENT)
+    assert [(r["company"], r["default_account"]) for r in mop["accounts"]] == [
+        (demo.COMPANY, demo.BANK_ACCOUNT)]
+
+
+def test_live_stock_flags():
+    """Goods are stock items received into one warehouse; services are non-stock."""
+    erp = ErpNext.from_env("REQUESTER")
+    assert set(demo.ITEMS) > demo.STOCK_ITEMS
+    for code in demo.ITEMS:
+        item = erp.get_doc("Item", code)
+        stock = code in demo.STOCK_ITEMS
+        assert item["is_stock_item"] == int(stock), code
+        warehouses = [(d["company"], d.get("default_warehouse")) for d in item["item_defaults"]]
+        assert warehouses == ([(demo.COMPANY, demo.WAREHOUSE)] if stock else []), code

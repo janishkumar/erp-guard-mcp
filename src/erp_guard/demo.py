@@ -33,6 +33,38 @@ ITEMS = {
     # No purchase history on purpose, so orders of any size pass the price check.
     "PROJECT-SVC": ("Fixed-price project services, per milestone", 10000),
 }
+# Goods are stock items, received into one warehouse (three-way match); the rest are
+# services, non-stock (two-way match).
+STOCK_ITEMS = {
+    "LAPTOP-14", "MONITOR-27", "TONER-K", "PAPER-A4", "SALT-TON", "ASPHALT-TON",
+    "DIESEL-GAL", "TIRE-TRK", "PIPE-DI-8", "VALVE-GATE-8", "CHLORINE-LB", "PPE-KIT",
+}
+WAREHOUSE = f"Stores - {ABBR}"
+# The company bank: a ledger account (no Bank Account record), the one payments may use.
+BANK_ACCOUNT = f"Demo Operating Bank - {ABBR}"
+MODE_OF_PAYMENT = "Bank Transfer"
+
+_REQUESTER = ["Purchase User", "Purchase Master Manager",
+              # Task is a later-phase type the generic tools write (live generic test).
+              "Projects User"]
+_APPROVER = ["Purchase User", "Purchase Master Manager", "Purchase Manager",
+             # ERPNext submits a document as the user who applies the workflow transition,
+             # and submitting a Payment Entry needs an Accounts role.
+             "Accounts User"]
+# Local test accounts: email -> (tag for the ERPNEXT_KEY_<tag> keys in .env, ERPNext
+# roles). Who may approve what is decided by config/policy.toml, not by these roles.
+USERS: dict[str, tuple[str, list[str]]] = {
+    "requester@example.com": ("REQUESTER", _REQUESTER),
+    "requester2@example.com": ("REQUESTER2", _REQUESTER),
+    "manager@example.com": ("MANAGER", _APPROVER),
+    "director@example.com": ("DIRECTOR", _APPROVER),
+    # + Auditor (read-only): a receipt reads the company's accounts, which Stock User can't.
+    "receiver@example.com": ("RECEIVER", ["Stock User", "Auditor"]),
+    "ap@example.com": ("AP", ["Accounts User"]),
+    # + Accounts User: submitting an invoice reads its Items, which Accounts Manager can't.
+    "controller@example.com": ("CONTROLLER", ["Accounts Manager", "Accounts User"]),
+    "treasury@example.com": ("TREASURY", ["Accounts User"]),
+}
 
 
 def cc(name: str) -> str:

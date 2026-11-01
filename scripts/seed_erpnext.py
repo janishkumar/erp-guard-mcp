@@ -95,6 +95,12 @@ SUPPLIER_FIELDS = [
     {"fieldname": "erp_guard_notes", "fieldtype": "Small Text", "label": "Notes",
      "insert_after": "erp_guard_onboarded_by"},
 ]
+# Who approved an invoice or payment: set by the workflow when it enters Approved (ON_ENTER
+# below), as on the purchase order, so the approver is ERPNext's own record.
+APPROVER_FIELD = {"fieldname": "erp_guard_approver", "fieldtype": "Data", "label": "Approved by",
+                  "allow_on_submit": 1, "read_only": 1}
+PI_FIELDS = [{**APPROVER_FIELD, "insert_after": "bill_date"}]
+PE_FIELDS = [{**APPROVER_FIELD, "insert_after": "reference_date"}]
 CC_FIELDS = [
     {"fieldname": "erp_guard_annual_budget", "fieldtype": "Currency", "label": "Annual budget",
      "insert_after": "cost_center_name"},
@@ -147,7 +153,8 @@ def setup_wizard(a: Admin) -> bool:
 
 def custom_fields(a: Admin) -> None:
     for dt, fields in (("Purchase Order", PO_FIELDS), ("Supplier", SUPPLIER_FIELDS),
-                       ("Cost Center", CC_FIELDS)):
+                       ("Cost Center", CC_FIELDS), ("Purchase Invoice", PI_FIELDS),
+                       ("Payment Entry", PE_FIELDS)):
         for f in fields:
             a.ensure({"doctype": "Custom Field", "dt": dt, **f}, f"{dt}-{f['fieldname']}")
 
@@ -489,9 +496,11 @@ TRANSITIONS = [("Draft", "Submit for Approval", "Pending Approval", False),
 # changing a pending order's lines, so it needs resubmitting).
 EXTRA_TRANSITIONS = {"Purchase Order": [("Pending Approval", "Withdraw", "Draft", False)]}
 # Purchase orders: a draft cancelled through erp-guard (erp_guard_cancelled) gets no more
-# transitions, and entering Approved records who approved, in the same transaction.
+# transitions. Orders, invoices and payments entering Approved record who approved, in the
+# same transaction.
 CONDITIONS = {"Purchase Order": "not doc.erp_guard_cancelled"}
-ON_ENTER = {("Purchase Order", "Approved"): ("erp_guard_approver", "frappe.session.user")}
+ON_ENTER = {(dt, "Approved"): ("erp_guard_approver", "frappe.session.user")
+            for dt in ("Purchase Order", "Purchase Invoice", "Payment Entry")}
 
 
 def _workflow(doctype: str, submitter: str, approvers: tuple[str, ...]) -> dict:

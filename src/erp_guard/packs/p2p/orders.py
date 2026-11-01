@@ -32,8 +32,22 @@ def _proposed(svc: Service, canon: dict, base: PurchaseOrder | None = None) -> P
                          Status.DRAFT, svc.today(), lines, canon.get("notes", ""))
 
 
+def _duplicate_lines(order: PurchaseOrder) -> C.CheckResult:
+    """Each item on one line: receipts and invoices are matched to the order per item."""
+    seen: set[str] = set()
+    dup = sorted({ln.item_code for ln in order.lines
+                  if ln.item_code in seen or seen.add(ln.item_code)})
+    if dup:
+        return C.CheckResult(
+            "duplicate_line", C.BLOCK,
+            f"{', '.join(dup)} is on more than one line; put each item on one line "
+            "(receipts and invoices are matched to the order per item).", {"items": dup})
+    return C.CheckResult("duplicate_line", C.PASS, "Each item is on one line.")
+
+
 def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool) -> list[C.CheckResult]:
-    """Split, budget and (for new lines) price, against fresh ERP data."""
+    """Split, budget and (for new lines) items, one line per item and price, against fresh
+    ERP data."""
     erp, policy, today = svc.erp, svc.policy, svc.today()
     since = min(today - timedelta(days=policy.split_window_days), svc.fy_start())
     cc_orders = erp.list_orders(cost_centre=order.cost_centre, since=since)
@@ -47,7 +61,7 @@ def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool) -> list
     )
     out = [C.split_purchase(order, cc_orders, policy, today), C.budget(order, snap)]
     if with_prices:
-        out.insert(0, C.items_known(order, erp.item_codes()))
+        out[:0] = [C.items_known(order, erp.item_codes()), _duplicate_lines(order)]
         prices = erp.last_purchase_prices(sorted({ln.item_code for ln in order.lines}))
         out.append(C.price_vs_last(order, prices, policy))
     return out

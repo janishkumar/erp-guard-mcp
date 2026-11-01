@@ -12,7 +12,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Iterable
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -22,9 +22,23 @@ from erp_guard.checks import BANK_KEY as _BANK_KEY
 from erp_guard.connectors.base import ErpError
 from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 from erp_guard.packs.p2p import APPROVE, REJECT, REVISE, SUBMIT_FOR_APPROVAL, WITHDRAW
+from erp_guard.packs.p2p.models import (
+    Allocation,
+    DocState,
+    Invoice,
+    InvoiceLine,
+    ItemInfo,
+    Payment,
+    Quote,
+    Receipt,
+    ReceiptLine,
+    Request,
+    RequestLine,
+)
 from erp_guard.policy import Policy, load_policy
 
 AUDIT_DOCTYPE = "ERP Guard Audit"
+CHANGE_REQUEST = "ERP Guard Change Request"
 
 # v1's document types, read through /api/resource.
 RESOURCES = frozenset({"Supplier", "Purchase Order", "Item", "Cost Center", AUDIT_DOCTYPE})
@@ -83,7 +97,7 @@ HTTP_VERBS = frozenset({"GET", "POST", "PUT"})
 _PAYMENT_BANK_KEYS = frozenset({"paid_from", "bank_account"})
 
 _SUPPLIER_FIELDS = ["name", "supplier_name", "tax_id", "disabled", "on_hold",
-                    "erp_guard_onboarded_by", "erp_guard_notes"]
+                    "erp_guard_onboarded_by", "erp_guard_notes", "creation"]
 
 
 class HardLimitError(ErpError):
@@ -306,18 +320,162 @@ def _order_status(d: dict) -> Status:
 
 def _order_from_doc(d: dict) -> PurchaseOrder:
     status = _order_status(d)
+    rows = d.get("items", [])
     lines = tuple(
         Line(i["item_code"], Decimal(str(i["qty"])), Decimal(str(i["rate"])),
              i.get("description") or "")
-        for i in d.get("items", [])
+        for i in rows
     )
+    requests = [i["material_request"] for i in rows if i.get("material_request")]
     return PurchaseOrder(
         id=d["name"], supplier_id=d["supplier"],
         cost_centre=d.get("erp_guard_cost_centre") or "",
         requester=d["owner"], status=status,
-        order_date=date.fromisoformat(str(d["transaction_date"])[:10]), lines=lines,
+        order_date=_date(d["transaction_date"]), lines=lines,
         notes=d.get("erp_guard_notes") or "", approver=d.get("erp_guard_approver") or None,
+        request=requests[0] if requests else None,
+        quotations=tuple(dict.fromkeys(i["supplier_quotation"] for i in rows
+                                       if i.get("supplier_quotation"))),
+        closed=d.get("status") == "Closed",
     )
+
+
+# --- purchase to pay: ERPNext documents as the pack's models ---------------------------
+
+# Document types with an approval workflow (seeded by `make seed`); the rest are submitted
+# directly. submit_doc asks ERPNext's metadata, not this list.
+_WORKFLOW_TYPES = frozenset({"Material Request", "Purchase Order", "Purchase Invoice",
+                             "Payment Entry", CHANGE_REQUEST})
+_WF_DRAFT_STATES = {"Draft": DocState.DRAFT, "Pending Approval": DocState.PENDING,
+                    "Rejected": DocState.REJECTED}
+
+
+def _date(v) -> date:
+    return date.fromisoformat(str(v)[:10])
+
+
+def _dec(v) -> Decimal:
+    return Decimal(str(v or 0))
+
+
+def _doc_state(d: dict, workflow: bool) -> DocState:
+    """docstatus first (a plain cancel leaves workflow_state "Approved" in v16; documents
+    submitted before their workflow existed were approved), then the workflow state."""
+    if d.get("docstatus") == 2:
+        return DocState.CANCELLED
+    if d.get("docstatus") == 1:
+        return DocState.APPROVED if workflow else DocState.SUBMITTED
+    return _WF_DRAFT_STATES.get(d.get("workflow_state") or "Draft", DocState.DRAFT) \
+        if workflow else DocState.DRAFT
+
+
+def _request(d: dict, rows: list[dict]) -> Request:
+    centres = [r["cost_center"] for r in rows if r.get("cost_center")]
+    return Request(d["name"], d["owner"], centres[0] if centres else "",
+                   _doc_state(d, True),
+                   tuple(RequestLine(r["item_code"], _dec(r["qty"])) for r in rows),
+                   _date(d["transaction_date"]))
+
+
+def _quote(d: dict, rows: list[dict]) -> Quote:
+    rfqs = [r["request_for_quotation"] for r in rows if r.get("request_for_quotation")]
+    return Quote(d["name"], d["supplier"], rfqs[0] if rfqs else None, _doc_state(d, False),
+                 tuple(Line(r["item_code"], _dec(r["qty"]), _dec(r["rate"])) for r in rows),
+                 _date(d["transaction_date"]))
+
+
+def _receipt(d: dict, rows: list[dict]) -> Receipt:
+    # A return's quantities are negative in ERPNext; the model's are what moved.
+    return Receipt(d["name"], d["supplier"], d["owner"], _doc_state(d, False),
+                   _date(d["posting_date"]),
+                   tuple(ReceiptLine(r.get("purchase_order") or "", r["item_code"],
+                                     abs(_dec(r["qty"]))) for r in rows),
+                   bool(d.get("is_return")), d.get("return_against") or None)
+
+
+def _invoice(d: dict, rows: list[dict]) -> Invoice:
+    return Invoice(
+        d["name"], d["supplier"], d.get("bill_no") or "",
+        _date(d.get("bill_date") or d["posting_date"]), d["owner"], _doc_state(d, True),
+        tuple(InvoiceLine(r.get("purchase_order") or "", r["item_code"], abs(_dec(r["qty"])),
+                          _dec(r["rate"]), r.get("purchase_receipt") or None) for r in rows),
+        approver=d.get("erp_guard_approver") or None, on_hold=bool(d.get("on_hold")),
+        is_return=bool(d.get("is_return")), return_against=d.get("return_against") or None,
+        is_paid=bool(d.get("is_paid")), remarks=d.get("remarks") or "")
+
+
+def _payment(d: dict, rows: list[dict]) -> Payment:
+    # References to anything but an invoice (an order, for an advance) aren't allocations.
+    return Payment(
+        d["name"], d.get("party") or "", d["owner"], _doc_state(d, True),
+        _date(d["posting_date"]), d.get("paid_from") or "",
+        tuple(Allocation(r["reference_name"], _dec(r["allocated_amount"])) for r in rows
+              if r.get("reference_doctype") == "Purchase Invoice"),
+        approver=d.get("erp_guard_approver") or None,
+        unallocated=_dec(d.get("unallocated_amount")))
+
+
+# doctype -> (child table field, its DocType, header fields, row fields, parser)
+_P2P_DOCS: dict[str, tuple[str, str, list[str], list[str], Callable]] = {
+    "Material Request": ("items", "Material Request Item",
+                         ["name", "owner", "docstatus", "workflow_state", "transaction_date"],
+                         ["item_code", "qty", "cost_center"], _request),
+    "Supplier Quotation": ("items", "Supplier Quotation Item",
+                           ["name", "owner", "docstatus", "supplier", "transaction_date"],
+                           ["item_code", "qty", "rate", "request_for_quotation"], _quote),
+    "Purchase Receipt": ("items", "Purchase Receipt Item",
+                         ["name", "owner", "docstatus", "supplier", "posting_date",
+                          "is_return", "return_against"],
+                         ["item_code", "qty", "purchase_order"], _receipt),
+    "Purchase Invoice": ("items", "Purchase Invoice Item",
+                         ["name", "owner", "docstatus", "workflow_state", "supplier",
+                          "bill_no", "bill_date", "posting_date", "erp_guard_approver",
+                          "on_hold", "is_return", "return_against", "is_paid", "remarks"],
+                         ["item_code", "qty", "rate", "purchase_order", "purchase_receipt"],
+                         _invoice),
+    "Payment Entry": ("references", "Payment Entry Reference",
+                      ["name", "owner", "docstatus", "workflow_state", "party",
+                       "posting_date", "paid_from", "erp_guard_approver",
+                       "unallocated_amount"],
+                      ["reference_doctype", "reference_name", "allocated_amount"], _payment),
+}
+
+
+def _keep_rows(rows: list[dict], wanted: dict[tuple, dict], key: Callable[[dict], tuple],
+               source: str) -> list[dict]:
+    """The rows of a mapped draft named in `wanted`, each updated with its values; rows not
+    named are dropped. Only the first row with a key is kept (an order carries an item on
+    one line). A key with no row is an error: the document would differ from the request."""
+    out, seen = [], set()
+    for r in rows:
+        k = key(r)
+        if k in wanted and k not in seen:
+            seen.add(k)
+            out.append({**r, **wanted[k]})
+    missing = [k for k in wanted if k not in seen]
+    if missing:
+        raise ErpError(f"Not on {source}: " + "; ".join(" ".join(map(str, k)) for k in missing))
+    return out
+
+
+def _one_per_key(keys: list[tuple]) -> None:
+    dup = sorted({k for k in keys if keys.count(k) > 1})
+    if dup:
+        raise ErpError("One line per order and item: " + "; ".join(" ".join(map(str, k))
+                                                                  for k in dup))
+
+
+def _plain(v):
+    """Field values as JSON: dates as ISO strings, Decimals as numbers."""
+    if isinstance(v, date):
+        return v.isoformat()
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, list):
+        return [_plain(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _plain(x) for k, x in v.items()}
+    return v
 
 
 class ErpNext:
@@ -458,7 +616,8 @@ class ErpNext:
     def _supplier(d: dict) -> Supplier:
         return Supplier(d["name"], d.get("supplier_name") or d["name"], d.get("tax_id") or None,
                         bool(d.get("disabled")), bool(d.get("on_hold")),
-                        d.get("erp_guard_onboarded_by") or None, d.get("erp_guard_notes") or "")
+                        d.get("erp_guard_onboarded_by") or None, d.get("erp_guard_notes") or "",
+                        _date(d["creation"]) if d.get("creation") else None)
 
     def list_suppliers(self) -> list[Supplier]:
         return [self._supplier(d) for d in self.c.get_list("Supplier", _SUPPLIER_FIELDS)]
@@ -483,7 +642,7 @@ class ErpNext:
             "Purchase Order",
             ["name", "supplier", "erp_guard_cost_centre", "owner", "docstatus",
              "workflow_state", "erp_guard_cancelled", "transaction_date",
-             "erp_guard_approver", "erp_guard_notes"],
+             "erp_guard_approver", "erp_guard_notes", "status"],
             filters, order_by="transaction_date desc")
         if not heads:
             return []
@@ -492,6 +651,8 @@ class ErpNext:
             "fields": ["name", "`tabPurchase Order Item`.item_code as item_code",
                        "`tabPurchase Order Item`.qty as qty",
                        "`tabPurchase Order Item`.rate as rate",
+                       "`tabPurchase Order Item`.material_request as material_request",
+                       "`tabPurchase Order Item`.supplier_quotation as supplier_quotation",
                        "`tabPurchase Order Item`.idx as idx"],
             "filters": [["name", "in", [h["name"] for h in heads]]],
             "limit_page_length": 0,
@@ -547,7 +708,7 @@ class ErpNext:
                 for ln in lines]
 
     def create_order(self, supplier_id, cost_centre, lines, notes, required_by):
-        body = {"supplier": supplier_id, "company": self.company,
+        body = {"supplier": supplier_id, "company": self.company, "ignore_pricing_rule": 1,
                 "transaction_date": date.today().isoformat(),
                 "schedule_date": required_by.isoformat(),
                 "erp_guard_cost_centre": cost_centre, "erp_guard_notes": notes,
@@ -614,3 +775,324 @@ class ErpNext:
                 "target": record.target or "", "payload_hash": record.payload_hash,
                 "checks": json.dumps(record.checks), "detail": record.detail}
         return self.c.request("POST", _res(AUDIT_DOCTYPE), body=body)["data"]["name"]
+
+    # purchase to pay: reads ------------------------------------------------------------
+    def _p2p_get(self, doctype: str, id: str):
+        d = self.get_doc(doctype, id)
+        if d is None:
+            return None
+        table, _, _, _, parse = _P2P_DOCS[doctype]
+        return parse(d, d.get(table) or [])
+
+    def _p2p_list(self, doctype: str, filters: list, order_by: str) -> list:
+        """Documents with their rows in two requests (headers, then rows by parent)."""
+        table, child, heads_f, rows_f, parse = _P2P_DOCS[doctype]
+        heads = list({h["name"]: h for h in self.find(
+            doctype, [["company", "=", self.company], *filters], heads_f, order_by, 0)}
+            .values())  # a filter on rows can repeat a header
+        if not heads:
+            return []
+        rows = self.find(doctype, [["name", "in", [h["name"] for h in heads]]],
+                         ["name", *(f"`tab{child}`.{f} as {f}" for f in rows_f),
+                          f"`tab{child}`.idx as idx"], None, 0)
+        by: dict[str, list[dict]] = {}
+        for r in sorted(rows, key=lambda r: (r["name"], r.get("idx") or 0)):
+            if r.get(rows_f[0]):
+                by.setdefault(r["name"], []).append(r)
+        return [parse(h, by.get(h["name"], [])) for h in heads]
+
+    def item_info(self, codes):
+        if not codes:
+            return {}
+        rows = self.find("Item", [["name", "in", list(codes)]],
+                         ["name", "is_stock_item", "stock_uom"], None, 0)
+        return {r["name"]: ItemInfo(r["name"], bool(r["is_stock_item"]), r["stock_uom"] or "")
+                for r in rows}
+
+    def get_request(self, id):
+        return self._p2p_get("Material Request", id)
+
+    def list_requests(self, *, since=None):
+        f = [["material_request_type", "=", "Purchase"]]
+        if since:
+            f.append(["transaction_date", ">=", since.isoformat()])
+        return self._p2p_list("Material Request", f, "transaction_date asc, name asc")
+
+    def list_quotes(self, *, item_codes, since):
+        if not item_codes:
+            return []
+        return self._p2p_list("Supplier Quotation", [
+            ["transaction_date", ">=", since.isoformat()],
+            ["Supplier Quotation Item", "item_code", "in", list(item_codes)]],
+            "transaction_date asc, name asc")
+
+    def list_receipts(self, *, po=None, supplier_id=None):
+        f = []
+        if supplier_id:
+            f.append(["supplier", "=", supplier_id])
+        if po:
+            f.append(["Purchase Receipt Item", "purchase_order", "=", po])
+        return self._p2p_list("Purchase Receipt", f, "posting_date asc, name asc")
+
+    def get_receipt(self, id):
+        return self._p2p_get("Purchase Receipt", id)
+
+    def list_invoices(self, *, supplier_id=None, po=None, since=None):
+        f = []
+        if supplier_id:
+            f.append(["supplier", "=", supplier_id])
+        if po:
+            f.append(["Purchase Invoice Item", "purchase_order", "=", po])
+        if since:
+            f.append(["bill_date", ">=", since.isoformat()])
+        return self._p2p_list("Purchase Invoice", f, "posting_date asc, name asc")
+
+    def get_invoice(self, id):
+        return self._p2p_get("Purchase Invoice", id)
+
+    def list_payments(self, *, supplier_id=None, invoice=None, since=None):
+        f = [["party_type", "=", "Supplier"], ["payment_type", "=", "Pay"]]
+        if supplier_id:
+            f.append(["party", "=", supplier_id])
+        if invoice:
+            f.append(["Payment Entry Reference", "reference_name", "=", invoice])
+        if since:
+            f.append(["posting_date", ">=", since.isoformat()])
+        return self._p2p_list("Payment Entry", f, "posting_date asc, name asc")
+
+    def get_payment(self, id):
+        return self._p2p_get("Payment Entry", id)
+
+    def outstanding(self, invoice_id):
+        """ERPNext's outstanding amount on a submitted invoice (payments and debit notes
+        against it reduce it); nothing on a draft, a cancelled invoice or a debit note."""
+        rows = self.find("Purchase Invoice", [["name", "=", invoice_id]],
+                         ["docstatus", "is_return", "outstanding_amount"], None, 1)
+        if not rows:
+            raise ErpError(f"No Purchase Invoice {invoice_id}")
+        r = rows[0]
+        if r["docstatus"] != 1 or r.get("is_return"):
+            return Decimal(0)
+        return _dec(r["outstanding_amount"])
+
+    # purchase to pay: writes -----------------------------------------------------------
+    # Documents are built with ERPNext's own mappers where there's a source document, so the
+    # links between them (order line -> receipt line -> invoice line) are ERPNext's. Every
+    # purchase document built here sets ignore_pricing_rule, so a pricing rule can't change
+    # a rate after the checks saw it.
+    def _parse(self, doctype: str, d: dict):
+        table, _, _, _, parse = _P2P_DOCS[doctype]
+        return parse(d, d.get(table) or [])
+
+    def create_request(self, cost_centre, lines, notes):
+        """A draft Material Request of type Purchase. ERPNext's request has no notes field;
+        the notes are checked and shown in the preview only."""
+        when = (date.today() + timedelta(days=14)).isoformat()
+        doc = self.insert({
+            "doctype": "Material Request", "material_request_type": "Purchase",
+            "company": self.company, "transaction_date": date.today().isoformat(),
+            "schedule_date": when,
+            "items": [{"item_code": ln.item_code, "qty": float(ln.qty), "schedule_date": when,
+                       "cost_center": cost_centre} for ln in lines]})
+        return self._parse("Material Request", doc)
+
+    def create_rfq(self, request_id, suppliers):
+        draft = self.map_doc("Material Request", request_id, "Request for Quotation")
+        draft["suppliers"] = [{"supplier": s} for s in suppliers]
+        draft["subject"] = draft.get("subject") or f"Quotation for {request_id}"
+        draft["message_for_supplier"] = draft.get("message_for_supplier") or \
+            f"Please quote for the items of {request_id}."
+        return self.insert(draft)["name"]
+
+    def create_quote(self, supplier_id, lines, rfq, quoted_on):
+        """A draft Supplier Quotation: from a (submitted) request for quotation when there
+        is one, keeping the lines' items at their quantities and rates."""
+        _one_per_key([(ln.item_code,) for ln in lines])
+        wanted = {(ln.item_code,): {"qty": float(ln.qty), "rate": float(ln.rate)}
+                  for ln in lines}
+        if rfq:
+            draft = self.map_doc("Request for Quotation", rfq, "Supplier Quotation")
+            draft["items"] = _keep_rows(draft.get("items") or [], wanted,
+                                        lambda r: (r["item_code"],), rfq)
+        else:
+            draft = {"doctype": "Supplier Quotation", "company": self.company,
+                     "items": [{"item_code": k[0], **v} for k, v in wanted.items()]}
+        draft.update(supplier=supplier_id, transaction_date=quoted_on.isoformat(),
+                     ignore_pricing_rule=1)
+        return self._parse("Supplier Quotation", self.insert(draft))
+
+    def create_receipt(self, po, lines, *, is_return=False, return_against=None):
+        """A receipt mapped from the order (a return from the receipt), with the lines'
+        quantities, then submitted: there's nothing to approve in a receipt."""
+        _one_per_key([(ln.po, ln.item_code) for ln in lines])
+        if is_return:
+            if not return_against:
+                raise ErpError("A return names the receipt it returns goods from")
+            draft = self.map_doc("Purchase Receipt", return_against, "Purchase Receipt")
+        else:
+            draft = self.map_doc("Purchase Order", po, "Purchase Receipt")
+        sign = -1 if is_return else 1
+        wanted = {(ln.po, ln.item_code): {"qty": sign * float(ln.qty),
+                                          "received_qty": sign * float(ln.qty),
+                                          "rejected_qty": 0} for ln in lines}
+        rows = _keep_rows(draft.get("items") or [], wanted,
+                          lambda r: (r.get("purchase_order"), r["item_code"]),
+                          return_against or po)
+        for r in rows:
+            r["stock_qty"] = r["qty"] * float(r.get("conversion_factor") or 1)
+        draft.update(items=rows, ignore_pricing_rule=1)
+        doc = self.insert(draft)
+        return self._parse("Purchase Receipt", self.submit("Purchase Receipt", doc["name"]))
+
+    def create_invoice(self, supplier_id, bill_no, bill_date, lines, remarks):
+        """A draft invoice: lines with a receipt are mapped from that receipt, the rest from
+        their order, merged into one invoice with the lines' quantities and rates."""
+        if not lines:
+            raise ErpError("An invoice needs at least one line")
+
+        def key(r):
+            return (r.get("purchase_receipt") or None, r.get("purchase_order"), r["item_code"])
+        _one_per_key([(ln.receipt, ln.po, ln.item_code) for ln in lines])
+        sources: dict[tuple[str, str], dict[tuple, dict]] = {}
+        for ln in lines:
+            src = ("Purchase Receipt", ln.receipt) if ln.receipt else ("Purchase Order", ln.po)
+            sources.setdefault(src, {})[(ln.receipt, ln.po, ln.item_code)] = {
+                "qty": float(ln.qty), "rate": float(ln.rate), "discount_percentage": 0,
+                "discount_amount": 0}
+        doc, rows = None, []
+        for (dt, name), wanted in sources.items():
+            draft = self.map_doc(dt, name, "Purchase Invoice")
+            rows += _keep_rows(draft.get("items") or [], wanted, key, name)
+            doc = doc or draft
+        doc.update(items=rows, supplier=supplier_id, bill_no=bill_no,
+                   bill_date=bill_date.isoformat(), remarks=remarks, ignore_pricing_rule=1)
+        return self._parse("Purchase Invoice", self.insert(doc))
+
+    def set_invoice_hold(self, id, hold, comment):
+        """ERPNext's own hold and release (on_hold, hold_comment) on the invoice."""
+        if hold:
+            self.call(RUN_DOC_METHOD, dt="Purchase Invoice", dn=id, method="block_invoice",
+                      args={"hold_comment": comment})
+        else:
+            self.call(RUN_DOC_METHOD, dt="Purchase Invoice", dn=id, method="unblock_invoice")
+        inv = self.get_invoice(id)
+        if inv is None:
+            raise ErpError(f"No Purchase Invoice {id}")
+        return inv
+
+    def create_debit_note(self, invoice_id, lines, remarks):
+        """A draft debit note mapped from the invoice, returning the lines' quantities at
+        their rates. It reduces the original invoice's outstanding amount, so what is owed
+        on the invoice is one number."""
+        _one_per_key([(ln.po, ln.item_code) for ln in lines])
+        draft = self.map_doc("Purchase Invoice", invoice_id, "Purchase Invoice")
+        wanted = {(ln.po, ln.item_code): {"qty": -float(ln.qty), "rate": float(ln.rate),
+                                          "discount_percentage": 0, "discount_amount": 0}
+                  for ln in lines}
+        draft["items"] = _keep_rows(draft.get("items") or [], wanted,
+                                    lambda r: (r.get("purchase_order"), r["item_code"]),
+                                    invoice_id)
+        draft.update(remarks=remarks, update_outstanding_for_self=0, ignore_pricing_rule=1)
+        return self._parse("Purchase Invoice", self.insert(draft))
+
+    def create_payment(self, supplier_id, allocations, paid_from):
+        """A draft Payment Entry (Pay, to the supplier) from ERPNext's own payment for each
+        invoice, merged into one, allocating exactly the given amounts. Paid from the given
+        ledger account; no bank account record, and no bank fields are sent."""
+        if not allocations:
+            raise ErpError("A payment pays at least one invoice")
+        doc, refs = None, []
+        for a in allocations:
+            draft = self.map_doc("Purchase Invoice", a.invoice, "Payment Entry")
+            mine = [r for r in draft.get("references") or []
+                    if (r.get("reference_doctype"), r.get("reference_name"))
+                    == ("Purchase Invoice", a.invoice)]
+            if not mine:
+                raise ErpError(f"ERPNext's payment for {a.invoice} doesn't reference it")
+            refs.append({**mine[0], "allocated_amount": float(a.amount)})
+            doc = doc or draft
+        total = float(sum((a.amount for a in allocations), Decimal(0)))
+        doc.update(references=refs, payment_type="Pay", party_type="Supplier",
+                   party=supplier_id, paid_from=paid_from, paid_amount=total,
+                   received_amount=total, reference_date=date.today().isoformat(),
+                   reference_no=", ".join(a.invoice for a in allocations)[:140])
+        for k in [k for k, v in doc.items() if _BANK_KEY.search(k) and v in (None, "")]:
+            del doc[k]  # e.g. bank, bank_account_no, party_bank_account: all empty
+        return self._parse("Payment Entry", self.insert(doc))
+
+    def workflow(self, doctype, id, action, comment=""):
+        """Apply a workflow transition. A purchase order's rejection reason is saved on the
+        order first (as set_status); other comments are kept in erp-guard's audit trail."""
+        if doctype == "Purchase Order" and action == REJECT and comment:
+            self._put(id, {"erp_guard_reason": comment})
+        self.apply_workflow(doctype, id, action)
+
+    def submit_doc(self, doctype, id):
+        """Submit a document type without an approval workflow (a direct submit would skip
+        a workflow's approval, so those are refused)."""
+        if self.get_meta(doctype).get("__workflow_docs"):
+            raise ErpError(f"{doctype} has an approval workflow; it is submitted by "
+                           "approving it")
+        self.submit(doctype, id)
+
+    def cancel_doc(self, doctype, id, reason):
+        """Cancel a submitted document (ERPNext keeps it, cancelled). A purchase order goes
+        through cancel_order, which also handles drafts and stores the reason; for other
+        types the reason is in erp-guard's audit trail."""
+        if doctype == "Purchase Order":
+            self.cancel_order(id, reason)
+            return
+        d = self._require(doctype, id)
+        if d.get("docstatus") != 1:
+            raise ErpError(f"{doctype} {id} isn't submitted; only submitted documents are "
+                           "cancelled")
+        self.cancel(doctype, id)
+
+    def update_draft(self, doctype, id, fields):
+        d = self._require(doctype, id)
+        if d.get("docstatus") != 0:
+            raise ErpError(f"{doctype} {id} isn't a draft")
+        doc = dict(d)
+        for k, v in _plain(fields).items():
+            if isinstance(v, list):
+                have = d.get(k) or []
+                if len(v) != len(have):
+                    raise ErpError(f"{k}: {len(v)} rows given, the draft has {len(have)}")
+                doc[k] = [{**r, **p} for r, p in zip(have, v, strict=True)]
+            else:
+                doc[k] = v
+        self.save(doc)
+
+    def close_order(self, po, reason):
+        """ERPNext's own close (update_status Closed), with the reason saved on the order."""
+        self._current(po)
+        if reason:
+            self._put(po, {"erp_guard_reason": reason})
+        self.call(PO_UPDATE_STATUS, status="Closed", name=po)
+        return self.get_order(po)
+
+    def create_change_request(self, target_doctype, target_name, fields):
+        """An ERP Guard Change Request, submitted for approval by a second person. Bank
+        details are refused here, as on any write."""
+        self.c._check_bank(fields, target_doctype)
+        self._require(target_doctype, target_name)
+        doc = self.insert({"doctype": CHANGE_REQUEST, "target_doctype": target_doctype,
+                           "target_name": target_name,
+                           "fields_json": json.dumps(_plain(fields), sort_keys=True),
+                           "requested_by": self.whoami()})
+        self.apply_workflow(CHANGE_REQUEST, doc["name"], SUBMIT_FOR_APPROVAL)
+        return doc["name"]
+
+    def apply_change_request(self, id, approve):
+        """Approve: the workflow approves (submits) the request, the change is saved on the
+        target document, and the request is marked Applied. Reject: the workflow rejects it
+        and it is marked Rejected. Either way it records who decided."""
+        cr = self._require(CHANGE_REQUEST, id)
+        if (cr.get("docstatus"), cr.get("workflow_state")) != (0, "Pending Approval"):
+            raise ErpError(f"Change request {id} isn't pending")
+        self.apply_workflow(CHANGE_REQUEST, id, APPROVE if approve else REJECT)
+        if approve:
+            target = self._require(cr["target_doctype"], cr["target_name"])
+            self.save({**target, **json.loads(cr["fields_json"])})
+        self.c.request("PUT", _res(CHANGE_REQUEST, id), body={
+            "status": "Applied" if approve else "Rejected", "decided_by": self.whoami()})

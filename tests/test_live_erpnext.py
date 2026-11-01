@@ -15,10 +15,19 @@ import httpx
 import pytest
 
 from erp_guard import demo
+from erp_guard.connectors.base import ErpError
 from erp_guard.connectors.erpnext import ErpNext, HardLimitError
 from erp_guard.env import load_env
 from erp_guard.generic.actions import meta_of
 from erp_guard.models import Line, Status
+from erp_guard.packs.p2p import APPROVE, SUBMIT_FOR_APPROVAL
+from erp_guard.packs.p2p.models import (
+    Allocation,
+    DocState,
+    InvoiceLine,
+    ReceiptLine,
+    RequestLine,
+)
 from erp_guard.policy import load_policy
 from erp_guard.service import Service
 
@@ -417,3 +426,187 @@ def test_live_read_grants(created):
     draft = ap.map_doc("Purchase Order", o.id, "Purchase Invoice")
     assert [i["item_code"] for i in draft["items"]] == ["PAPER-A4"]
     assert svc("CONTROLLER").erp.get_doc("Item", "PAPER-A4")["is_stock_item"] == 1
+
+
+# --- purchase-to-pay documents through the connector -----------------------------------
+
+D = Decimal
+PI, PE, PR = "Purchase Invoice", "Payment Entry", "Purchase Receipt"
+
+
+@pytest.fixture
+def undo():
+    """(connector, doctype, name) to cancel after the test, newest first (a payment before
+    its invoice, an invoice before its receipt). Nothing is deleted."""
+    docs: list[tuple] = []
+    yield docs
+    for erp, doctype, name in reversed(docs):
+        if erp.get_doc(doctype, name)["docstatus"] == 1:
+            erp.cancel(doctype, name)
+
+
+def _approved_order(created, lines) -> str:
+    req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
+    o = req.create_order("TRANE U.S. INC", CC, lines, "live p2p",
+                         date.today() + timedelta(days=14))
+    created.append(o.id)
+    req.set_status(o.id, Status.PENDING, "")
+    mgr.approve_order(o.id)
+    return o.id
+
+
+def test_live_p2p_roundtrip(created, undo):
+    """Receipt and return, invoice from the receipt and the order, hold and release,
+    approval, debit note, payment and its approval: outstanding goes to 0. Every document
+    is cancelled afterwards, and none is a history document, so the seed's history counts
+    don't change."""
+    po = _approved_order(created, [Line("PAPER-A4", D(4), D(42)),
+                                   Line("HVAC-SVC", D(1), D(640))])
+    rcv, ap, ctl = svc("RECEIVER").erp, svc("AP").erp, svc("CONTROLLER").erp
+    trs, mgr = svc("TREASURY").erp, svc("MANAGER").erp
+
+    r = rcv.create_receipt(po, [ReceiptLine(po, "PAPER-A4", D(3))])
+    undo.append((rcv, PR, r.id))
+    assert (r.state, r.receiver, r.supplier_id, r.lines) == (
+        DocState.SUBMITTED, "receiver@example.com", "TRANE U.S. INC",
+        (ReceiptLine(po, "PAPER-A4", D(3)),))
+    ret = rcv.create_receipt(po, [ReceiptLine(po, "PAPER-A4", D(1))], is_return=True,
+                             return_against=r.id)
+    undo.append((rcv, PR, ret.id))
+    assert (ret.is_return, ret.return_against, ret.lines) == (
+        True, r.id, (ReceiptLine(po, "PAPER-A4", D(1)),))
+    assert rcv.list_receipts(po=po) == [r, ret]
+
+    bill = f"LIVE-{uuid.uuid4().hex[:6]}"
+    inv = ap.create_invoice("TRANE U.S. INC", bill, date.today(), [
+        InvoiceLine(po, "PAPER-A4", D(2), D(42), r.id),
+        InvoiceLine(po, "HVAC-SVC", D(1), D(640))], "live roundtrip")
+    undo.append((ctl, PI, inv.id))
+    assert (inv.state, inv.entered_by, inv.bill_no, inv.total, inv.remarks) == (
+        DocState.DRAFT, "ap@example.com", bill, D(724), "live roundtrip")
+    assert [(ln.po, ln.item_code, ln.receipt) for ln in inv.lines] == [
+        (po, "PAPER-A4", r.id), (po, "HVAC-SVC", None)]
+    assert ap.outstanding(inv.id) == 0
+    ap.update_draft(PI, inv.id, {"remarks": "live roundtrip (checked)"})
+    ap.workflow(PI, inv.id, SUBMIT_FOR_APPROVAL)
+    assert ap.get_invoice(inv.id).state == DocState.PENDING
+    ctl.workflow(PI, inv.id, APPROVE)
+    inv = ap.get_invoice(inv.id)
+    assert (inv.state, inv.approver, inv.remarks) == (
+        DocState.APPROVED, "controller@example.com", "live roundtrip (checked)")
+    assert ap.list_invoices(po=po) == [inv]
+    assert trs.outstanding(inv.id) == D(724)
+
+    assert ctl.set_invoice_hold(inv.id, True, "price query").on_hold
+    assert ctl.get_doc(PI, inv.id)["hold_comment"] == "price query"
+    assert not ctl.set_invoice_hold(inv.id, False, "").on_hold
+
+    note = ap.create_debit_note(inv.id, [InvoiceLine(po, "PAPER-A4", D(1), D(42))],
+                                "one case damaged")
+    undo.append((ctl, PI, note.id))
+    assert (note.is_return, note.return_against, note.total, note.state) == (
+        True, inv.id, D(42), DocState.DRAFT)
+    ap.workflow(PI, note.id, SUBMIT_FOR_APPROVAL)
+    ctl.workflow(PI, note.id, APPROVE)
+    assert trs.outstanding(inv.id) == D(682)
+
+    pay = trs.create_payment("TRANE U.S. INC", [Allocation(inv.id, D(682))],
+                             demo.BANK_ACCOUNT)
+    undo.append((mgr, PE, pay.id))
+    assert (pay.state, pay.payer, pay.paid_from, pay.amount, pay.unallocated) == (
+        DocState.DRAFT, "treasury@example.com", demo.BANK_ACCOUNT, D(682), 0)
+    doc = trs.get_doc(PE, pay.id)
+    assert (doc["payment_type"], doc["party_type"], doc.get("bank_account")) == (
+        "Pay", "Supplier", None)
+    assert trs.outstanding(inv.id) == D(682)  # a draft pays nothing
+    trs.workflow(PE, pay.id, SUBMIT_FOR_APPROVAL)
+    mgr.workflow(PE, pay.id, APPROVE)
+    pay = trs.get_payment(pay.id)
+    assert (pay.state, pay.approver) == (DocState.APPROVED, "manager@example.com")
+    assert trs.outstanding(inv.id) == 0
+    assert trs.list_payments(invoice=inv.id) == [pay]
+    assert pay in trs.list_payments(supplier_id="TRANE U.S. INC", since=date.today())
+
+    with pytest.raises(ErpError, match="workflow"):
+        trs.submit_doc(PE, pay.id)
+    with pytest.raises(ErpError, match="Not on"):
+        rcv.create_receipt(po, [ReceiptLine(po, "LAPTOP-14", D(1))])
+
+
+def test_live_p2p_requests_and_quotes(undo):
+    """Purchase request on its workflow, a request for quotation from it, a supplier quote
+    answering it and one without; all cancelled afterwards. In ERPNext only Purchase
+    Manager submits a request for quotation, so the manager does here."""
+    req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
+    mr = req.create_request(CC, [RequestLine("LAPTOP-14", D(5))], "new starters")
+    assert (mr.requester, mr.cost_centre, mr.state, mr.lines) == (
+        "requester@example.com", CC, DocState.DRAFT, (RequestLine("LAPTOP-14", D(5)),))
+    req.update_draft("Material Request", mr.id, {"items": [{"qty": 6}]})
+    req.workflow("Material Request", mr.id, SUBMIT_FOR_APPROVAL)
+    mgr.workflow("Material Request", mr.id, APPROVE)
+    undo.append((mgr, "Material Request", mr.id))
+    mr = req.get_request(mr.id)
+    assert (mr.state, mr.lines[0].qty) == (DocState.APPROVED, D(6))
+    assert mr in req.list_requests(since=date.today())
+
+    rfq = req.create_rfq(mr.id, ["TRANE U.S. INC", "HERC RENTALS INC"])
+    mgr.submit_doc("Request for Quotation", rfq)
+    undo.append((mgr, "Request for Quotation", rfq))
+    q1 = req.create_quote("TRANE U.S. INC", [Line("LAPTOP-14", D(6), D(1100))], rfq,
+                          date.today())
+    req.submit_doc("Supplier Quotation", q1.id)
+    undo.append((mgr, "Supplier Quotation", q1.id))
+    q2 = req.create_quote("HERC RENTALS INC", [Line("LAPTOP-14", D(6), D(1180))], None,
+                          date.today())
+    req.submit_doc("Supplier Quotation", q2.id)
+    undo.append((mgr, "Supplier Quotation", q2.id))
+    assert (q1.rfq, q1.supplier_id, q1.lines) == (
+        rfq, "TRANE U.S. INC", (Line("LAPTOP-14", D(6), D(1100)),))
+    found = {q.id: q for q in req.list_quotes(item_codes=["LAPTOP-14"],
+                                              since=date.today())}
+    assert (found[q1.id].state, found[q2.id].rfq) == (DocState.SUBMITTED, None)
+
+
+def test_live_close_order(created):
+    """ERPNext's own close, with the reason on the order; reopened afterwards so the
+    cleanup can cancel it."""
+    po = _approved_order(created, [Line("PAPER-A4", D(1), D(42))])
+    req = svc("REQUESTER").erp
+    o = req.close_order(po, "no longer needed")
+    assert o.closed and o.status == Status.APPROVED
+    assert req.get_doc("Purchase Order", po)["erp_guard_reason"] == "no longer needed"
+    assert not [x for x in req.list_orders(cost_centre=CC) if x.id == po and not x.closed]
+    req.call("erpnext.buying.doctype.purchase_order.purchase_order.update_status",
+             status="Submitted", name=po)  # ERPNext's re-open
+    assert not req.get_order(po).closed
+
+
+def test_live_change_requests():
+    """A change request waits for a second person; rejected, it changes nothing; approved,
+    it's saved on the target. The approved change here sets a value the supplier already
+    has. Change requests stay on record (no role cancels them). (Only ERPNext's Item
+    Manager writes items, a role no demo user holds.)"""
+    req2, mgr = svc("REQUESTER2").erp, svc("MANAGER").erp
+    no = req2.create_change_request("Item", "PAPER-A4", {"is_stock_item": 0})
+    cr = mgr.get_doc("ERP Guard Change Request", no)
+    assert (cr["workflow_state"], cr["requested_by"]) == ("Pending Approval",
+                                                          "requester2@example.com")
+    mgr.apply_change_request(no, approve=False)
+    cr = mgr.get_doc("ERP Guard Change Request", no)
+    assert (cr["workflow_state"], cr["status"], cr["decided_by"]) == (
+        "Rejected", "Rejected", "manager@example.com")
+    assert mgr.get_doc("Item", "PAPER-A4")["is_stock_item"] == 1
+    sup = mgr.get_doc("Supplier", "TRANE U.S. INC")
+    yes = req2.create_change_request("Supplier", "TRANE U.S. INC",
+                                     {"erp_guard_notes": sup["erp_guard_notes"]})
+    mgr.apply_change_request(yes, approve=True)
+    cr = mgr.get_doc("ERP Guard Change Request", yes)
+    assert (cr["docstatus"], cr["workflow_state"], cr["status"], cr["decided_by"]) == (
+        1, "Approved", "Applied", "manager@example.com")
+    with pytest.raises(ErpError, match="pending"):
+        mgr.apply_change_request(yes, approve=True)
+    after = mgr.get_doc("Supplier", "TRANE U.S. INC")
+    assert (after["modified_by"], after["modified"] > sup["modified"]) == (
+        "manager@example.com", True)  # saved by the approver
+    with pytest.raises(HardLimitError, match="bank"):
+        req2.create_change_request("Supplier", "TRANE U.S. INC", {"default_bank_account": "x"})

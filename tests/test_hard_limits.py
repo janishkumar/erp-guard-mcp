@@ -17,13 +17,26 @@ from erp_guard.connectors.memory import MemoryErp
 FORBIDDEN = ("pay", "bank", "delete", "remove", "iban", "transfer")
 
 
+def _forbidden(names, allowed=frozenset()) -> list[str]:
+    return [n for n in names if n not in allowed and any(f in n.lower() for f in FORBIDDEN)]
+
+
+def _public(cls) -> set[str]:
+    return {n for n, _ in inspect.getmembers(cls) if not n.startswith("_")}
+
+
 def test_connector_protocol_has_no_forbidden_methods():
-    names = [n for n, _ in inspect.getmembers(base.ErpConnector) if not n.startswith("_")]
-    assert not [n for n in names if any(f in n.lower() for f in FORBIDDEN)]
+    """v1's protocol names no payment at all. Purchase to pay adds exactly the payment
+    methods in PAYMENT_METHODS (draft a payment against invoices, read payments); nothing
+    names bank details or deletion, in the protocols or their implementations."""
+    assert not _forbidden(_public(base.ErpConnector))
+    assert {"create_payment", "get_payment", "list_payments"} == base.PAYMENT_METHODS
+    assert _public(base.P2PConnector) >= base.PAYMENT_METHODS
+    assert not _forbidden(_public(base.P2PConnector), base.PAYMENT_METHODS)
     for impl in (MemoryErp, ErpNext):
         public = [n for n, _ in inspect.getmembers(impl, inspect.isfunction)
                   if not n.startswith("_")]
-        assert not [n for n in public if any(f in n.lower() for f in FORBIDDEN)], impl
+        assert not _forbidden(public, base.PAYMENT_METHODS), impl
 
 
 def test_no_tool_can_pay_bank_or_delete():

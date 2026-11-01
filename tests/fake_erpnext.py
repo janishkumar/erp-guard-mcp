@@ -6,7 +6,9 @@ answers only the requests the connector makes, and records every one.
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -18,6 +20,21 @@ FIX = Path(__file__).parent / "fixtures" / "erpnext"
 # The seeded approval workflows: action -> (next state, docstatus).
 _NEXT = {"Submit for Approval": ("Pending Approval", 0), "Approve": ("Approved", 1),
          "Reject": ("Rejected", 0), "Revise": ("Draft", 0), "Withdraw": ("Draft", 0)}
+# Child table DocType -> its field on the parent, for list queries that read rows.
+_TABLES = {"Purchase Order Item": "items", "Purchase Receipt Item": "items",
+           "Purchase Invoice Item": "items", "Payment Entry Reference": "references",
+           "Material Request Item": "items", "Supplier Quotation Item": "items"}
+_ROW_FIELD = re.compile(r"`tab([^`]+)`\.(\w+) as (\w+)")
+
+
+def _match(value, op: str, want) -> bool:
+    if op == "=":
+        return value == want
+    if op == "in":
+        return value in want
+    if op == ">=":
+        return value is not None and str(value) >= str(want)
+    raise AssertionError(f"fake has no filter op {op}")
 
 
 def _not_found(what: str) -> httpx.Response:
@@ -33,6 +50,8 @@ class FakeErpNext:
         self.workflows: set[str] = set()        # doctypes with an active workflow
         self.transitions: dict[tuple[str, str], list[str]] = {}
         self.meta_overrides: dict[str, dict] = {}
+        # Mapper method (its last dotted part) -> the unsaved draft it returns.
+        self.mapped: dict[str, dict] = {}
         self._n = 0
 
     # helpers for tests -----------------------------------------------------------------
@@ -93,17 +112,24 @@ class FakeErpNext:
         if dt == "Has Role":
             user = body["filters"][0][2]
             return [{"role": r} for r in self.roles.get(user, [])]
-        if dt == "Purchase Order" and any("`tabPurchase Order Item`" in f
-                                          for f in body.get("fields", [])):
+        row_fields = [_ROW_FIELD.fullmatch(f) for f in body.get("fields", [])]
+        if any(row_fields):  # rows of the named parents, as ERPNext's child-field join
             names = body["filters"][0][2]
-            return [{"name": d["name"], "idx": i + 1, **{k: it[k] for k in
-                                                         ("item_code", "qty", "rate")}}
+            table = _TABLES[next(m for m in row_fields if m).group(1)]
+            return [{"name": d["name"], **{m.group(3): (i + 1 if m.group(2) == "idx"
+                                                       else it.get(m.group(2)))
+                                           for m in row_fields if m}}
                     for d in self.of(dt) if d["name"] in names
-                    for i, it in enumerate(d.get("items", []))]
+                    for i, it in enumerate(d.get(table, []))]
         rows = self.of(dt)
-        for field, op, value in body.get("filters") or []:
-            if op == "=":
-                rows = [r for r in rows if r.get(field) == value]
+        for f in body.get("filters") or []:
+            if len(f) == 4:  # a filter on a child table's rows
+                child, field, op, value = f
+                rows = [r for r in rows if any(_match(it.get(field), op, value)
+                                               for it in r.get(_TABLES[child], []))]
+            else:
+                field, op, value = f
+                rows = [r for r in rows if _match(r.get(field), op, value)]
         fields = body.get("fields") or ["name"]
         out = [{k: r.get(k) for k in fields} for r in rows]
         return out[: body["limit_page_length"]] if body.get("limit_page_length") else out
@@ -146,6 +172,18 @@ class FakeErpNext:
             if (d["doctype"], state) == ("Purchase Order", "Approved"):
                 d["erp_guard_approver"] = self.user  # the seeded workflow's update field
             return ok(d)
+        if method.rsplit(".", 1)[-1] in self.mapped:
+            return ok(copy.deepcopy(self.mapped[method.rsplit(".", 1)[-1]]))
+        if method == "frappe.handler.run_doc_method":
+            d = self.docs[(body["dt"], body["dn"])]
+            if body["method"] == "block_invoice":
+                d.update(on_hold=1, hold_comment=(body.get("args") or {}).get("hold_comment"))
+            else:
+                d.update(on_hold=0, hold_comment=None)
+            return ok(None)
+        if method.endswith(".purchase_order.update_status"):
+            self.docs[("Purchase Order", body["name"])]["status"] = body["status"]
+            return ok(None)
         if method.endswith(".make_purchase_receipt"):
             src = self.docs[("Purchase Order", body["source_name"])]
             return ok({"doctype": "Purchase Receipt", "docstatus": 0, "__islocal": 1,

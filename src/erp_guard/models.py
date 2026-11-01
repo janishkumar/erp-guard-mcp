@@ -31,6 +31,7 @@ class Supplier:
     on_hold: bool = False
     onboarded_by: str | None = None
     notes: str = ""
+    onboarded_on: date | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,12 @@ class PurchaseOrder:
     lines: tuple[Line, ...]
     notes: str = ""
     approver: str | None = None
+    # Purchase to pay: the purchase request and supplier quotations the order was made
+    # from, why there's no competition if so, and whether it was closed.
+    request: str | None = None
+    quotations: tuple[str, ...] = ()
+    sole_source_reason: str = ""
+    closed: bool = False
 
     @property
     def total(self) -> Decimal:

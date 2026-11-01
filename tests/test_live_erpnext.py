@@ -163,6 +163,47 @@ def test_live_po_reject_revise_and_draft_cancel(created):
     assert req.erp.transitions("Purchase Order", po) == []  # nothing more to do with it
 
 
+def test_live_amend_pending_withdraws_it(created):
+    """Amending a pending order withdraws it to Draft first. An approval code the manager
+    previewed before the amendment is refused at write time: the order isn't pending."""
+    req, mgr = svc("REQUESTER"), svc("MANAGER")
+    _, out = run(req, "create_purchase_order", _po())
+    po = out.target
+    created.append(po)
+    assert run(req, "submit_for_approval", {"po": po})[1].outcome == "written"
+    early = mgr.preview("approve_purchase_order", {"po": po})
+    assert early.code, [r.message for r in early.checks]
+    assert req.erp.transitions("Purchase Order", po) == ["Withdraw"]  # the submitter's way back
+    _, am = run(req, "amend_purchase_order", {"po": po, "lines": [
+        {"item_code": "HVAC-SVC", "qty": 30, "rate": 640}]})
+    assert am.outcome == "written", am.message
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["workflow_state"], doc["docstatus"]) == ("Draft", 0)
+    o = req.erp.get_order(po)
+    assert o.status == Status.DRAFT and o.total == 30 * 640
+    late = mgr.execute("approve_purchase_order", {"po": po}, early.code)
+    assert late.outcome == "blocked" and "Draft" in late.message
+    assert req.erp.get_doc("Purchase Order", po)["docstatus"] == 0
+
+
+def test_live_requester_cancels_own_pending_order(created):
+    """The requester cancels their own order while it waits for approval: it stays a draft
+    with the cancelled flag, and no approver can act on it any more."""
+    req, mgr = svc("REQUESTER"), svc("MANAGER")
+    _, out = run(req, "create_purchase_order", _po())
+    po = out.target
+    created.append(po)
+    assert run(req, "submit_for_approval", {"po": po})[1].outcome == "written"
+    _, c = run(req, "cancel_purchase_order", {"po": po, "reason": "found a cheaper quote"})
+    assert c.outcome == "written", c.message
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["docstatus"], doc["erp_guard_cancelled"], doc["erp_guard_reason"]) == (
+        0, 1, "found a cheaper quote")
+    assert req.erp.get_order(po).status == Status.CANCELLED
+    assert mgr.erp.transitions("Purchase Order", po) == []
+    assert mgr.preview("approve_purchase_order", {"po": po}).blocked
+
+
 def test_write_without_code_is_refused_and_audited_in_erp(created):
     req = svc("REQUESTER")
     before = len(req.erp.list_orders(cost_centre=CC))

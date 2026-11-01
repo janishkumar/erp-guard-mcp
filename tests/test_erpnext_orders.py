@@ -108,9 +108,13 @@ def test_amend_draft_rejected_and_pending(fake):
     o = erp.amend_order(PO, new, "two")
     assert o.status == Status.DRAFT and _actions(fake) == ["Revise"]
     _doc(fake)["workflow_state"] = "Pending Approval"
-    with pytest.raises(ErpError, match="reject it, then amend"):
-        erp.amend_order(PO, new, "two")
-    assert _actions(fake) == ["Revise"]
+    o = erp.amend_order(PO, [Line("SALT-TON", Decimal(3), Decimal(900))], "three")
+    assert (o.status, o.total) == (Status.DRAFT, Decimal(2700))
+    assert _actions(fake) == ["Revise", "Withdraw"]
+    # Withdrawn before the lines are saved: the PUT comes after the transition.
+    paths = [(r.method, r.url.path) for r in fake.calls if r.method in ("POST", "PUT")]
+    assert paths[-2:] == [("POST", "/api/method/" + APPLY),
+                          ("PUT", f"/api/resource/Purchase Order/{PO}")]
 
 
 def test_missing_order(fake):

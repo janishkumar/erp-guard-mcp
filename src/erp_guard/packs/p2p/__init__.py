@@ -20,3 +20,12 @@ P2P_OWNED: frozenset[str] = frozenset({
     "Payment Entry",
     "ERP Guard Change Request",
 })
+
+# Purchase Order approval workflow actions (the workflow `make seed` creates in ERPNext).
+# Approve submits the order; Revise (from Rejected) and Withdraw (from Pending Approval)
+# take it back to Draft, and happen only inside amend_purchase_order.
+SUBMIT_FOR_APPROVAL = "Submit for Approval"
+APPROVE = "Approve"
+REJECT = "Reject"
+REVISE = "Revise"
+WITHDRAW = "Withdraw"

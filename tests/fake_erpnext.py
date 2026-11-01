@@ -17,7 +17,7 @@ from erp_guard.connectors.erpnext import AUDIT_DOCTYPE, ErpNext, FrappeClient
 FIX = Path(__file__).parent / "fixtures" / "erpnext"
 # The seeded approval workflows: action -> (next state, docstatus).
 _NEXT = {"Submit for Approval": ("Pending Approval", 0), "Approve": ("Approved", 1),
-         "Reject": ("Rejected", 0), "Revise": ("Draft", 0)}
+         "Reject": ("Rejected", 0), "Revise": ("Draft", 0), "Withdraw": ("Draft", 0)}
 
 
 def _not_found(what: str) -> httpx.Response:

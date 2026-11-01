@@ -407,7 +407,8 @@ def test_purchase_order_submit_and_reject_through_workflow_action(fake, policy):
 
 @pytest.mark.parametrize("action,needle", [
     ("Revise", "amend_purchase_order"),
-    ("Delete", "Submit for Approval, Approve, Reject, Revise"),
+    ("Withdraw", "amend_purchase_order"),
+    ("Delete", "Submit for Approval, Approve, Reject, Revise, Withdraw"),
 ])
 def test_purchase_order_workflow_actions_the_pack_refuses(svc, fake, action, needle):
     p = svc.preview("workflow_action", _wf(action))

@@ -21,6 +21,7 @@ import httpx
 from erp_guard.checks import BANK_KEY as _BANK_KEY
 from erp_guard.connectors.base import ErpError
 from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
+from erp_guard.packs.p2p import APPROVE, REJECT, REVISE, SUBMIT_FOR_APPROVAL, WITHDRAW
 from erp_guard.policy import Policy, load_policy
 
 AUDIT_DOCTYPE = "ERP Guard Audit"
@@ -283,11 +284,11 @@ def _copy(doc: dict, drop: frozenset[str]) -> dict:
 
 
 # Purchase Order workflow ("Purchase Order Approval", seeded by `make seed`): its draft
-# states and the actions between them. Approve submits the order.
+# states. The action names live with the pack (erp_guard.packs.p2p).
 _DRAFT_STATES = {"Draft": Status.DRAFT, "Pending Approval": Status.PENDING,
                  "Rejected": Status.REJECTED}
-SUBMIT_FOR_APPROVAL, APPROVE, REJECT, REVISE = ("Submit for Approval", "Approve", "Reject",
-                                                "Revise")
+# The action that takes an order in this state back to Draft.
+_BACK_TO_DRAFT = {"Rejected": REVISE, "Pending Approval": WITHDRAW}
 
 
 def _order_status(d: dict) -> Status:
@@ -596,16 +597,13 @@ class ErpNext:
         return self._put(order_id, {"erp_guard_cancelled": 1, "erp_guard_reason": reason})
 
     def amend_order(self, order_id, lines, notes):
-        """New lines on a draft. A rejected order is revised back to Draft first. ERPNext's
-        workflow has no way back from Pending Approval, so a pending order is refused: an
-        approver rejects it, then it can be amended."""
+        """New lines on a draft. A rejected order is revised and a pending one withdrawn
+        back to Draft first, so an amended order always needs resubmitting (an approval
+        previewed before the amendment no longer finds it pending)."""
         current = self._current(order_id)
-        state = current.get("workflow_state")
-        if state == "Pending Approval":
-            raise ErpError(f"{order_id} is pending approval; ERPNext's workflow has no way "
-                           "back to Draft from there. Ask an approver to reject it, then amend")
-        if state == "Rejected":
-            self._transition(order_id, REVISE)
+        back = _BACK_TO_DRAFT.get(current.get("workflow_state"))
+        if back:
+            self._transition(order_id, back)
         schedule = date.fromisoformat(str(current["schedule_date"])[:10])
         return self._put(order_id, {
             "items": self._items(lines, current.get("erp_guard_cost_centre") or "", schedule),

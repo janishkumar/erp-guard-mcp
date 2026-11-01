@@ -485,6 +485,9 @@ TRANSITIONS = [("Draft", "Submit for Approval", "Pending Approval", False),
                ("Pending Approval", "Approve", "Approved", True),
                ("Pending Approval", "Reject", "Rejected", True),
                ("Rejected", "Revise", "Draft", False)]
+# Purchase orders can also be withdrawn from approval (amend_purchase_order does this before
+# changing a pending order's lines, so it needs resubmitting).
+EXTRA_TRANSITIONS = {"Purchase Order": [("Pending Approval", "Withdraw", "Draft", False)]}
 # Purchase orders: a draft cancelled through erp-guard (erp_guard_cancelled) gets no more
 # transitions, and entering Approved records who approved, in the same transaction.
 CONDITIONS = {"Purchase Order": "not doc.erp_guard_cancelled"}
@@ -507,7 +510,8 @@ def _workflow(doctype: str, submitter: str, approvers: tuple[str, ...]) -> dict:
         "send_email_alert": 0, "workflow_state_field": "workflow_state", "states": states,
         "transitions": [{"state": st, "action": act, "next_state": nxt, "allowed": role,
                          "allow_self_approval": 1, "condition": CONDITIONS.get(doctype)}
-                        for st, act, nxt, by_approver in TRANSITIONS
+                        for st, act, nxt, by_approver in
+                        TRANSITIONS + EXTRA_TRANSITIONS.get(doctype, [])
                         for role in (approvers if by_approver else (submitter,))],
     }
 
@@ -517,7 +521,7 @@ def workflows(a: Admin) -> None:
     before the purchase order's workflow was turned on gets it activated here)."""
     for state, _ in STATES:
         a.ensure({"doctype": "Workflow State", "workflow_state_name": state}, state)
-    for _, action, _, _ in TRANSITIONS:
+    for _, action, _, _ in TRANSITIONS + [t for ts in EXTRA_TRANSITIONS.values() for t in ts]:
         a.ensure({"doctype": "Workflow Action Master", "workflow_action_name": action}, action)
     for doctype, (submitter, approvers) in WORKFLOWS.items():
         doc = _workflow(doctype, submitter, approvers)

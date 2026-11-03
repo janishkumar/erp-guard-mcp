@@ -562,6 +562,17 @@ def test_live_receive_and_return(created, undo):
         DocState.SUBMITTED, "receiver@example.com", (ReceiptLine(po, "PAPER-A4", D(100)),))
     assert rcv.erp.get_doc(PR, r.id)["docstatus"] == 1
 
+    def drafts():
+        return rcv.erp.find(PR, [["docstatus", "=", 0],
+                                 ["Purchase Receipt Item", "purchase_order", "=", po]],
+                            ["name"], limit=0)
+
+    # 101 of 100 is within the guard's 5%, but ERPNext's own allowance (0% at its defaults)
+    # refuses the submit: the stricter wins, and no draft is left behind.
+    p, out = run(rcv, "receive_goods", {"po": po, "lines": item(1)})
+    assert p.code and out.outcome == "error", out.message
+    assert drafts() == []
+
     ret_args = {"receipt": r.id, "lines": item(5), "reason": "damaged on delivery"}
     assert run(rcv, "return_goods", {**ret_args, "lines": item(106)})[0].code is None
     p, out = run(rcv, "return_goods", ret_args)
@@ -570,8 +581,12 @@ def test_live_receive_and_return(created, undo):
     undo.append((rcv.erp, PR, ret.id))
     assert (ret.is_return, ret.return_against, ret.lines) == (
         True, r.id, (ReceiptLine(po, "PAPER-A4", D(5)),))
-    # 100 received less 5 returned is 95: 11 more would be 106, over the guard's limit.
+    # 100 received less 5 returned is 95 (returns are netted): the guard allows 10 more (105,
+    # within 5%) and blocks 11 (106). ERPNext's 0% allowance then refuses the 10.
     assert run(rcv, "receive_goods", {"po": po, "lines": item(11)})[0].code is None
+    p, out = run(rcv, "receive_goods", {"po": po, "lines": item(10)})
+    assert p.code and out.outcome == "error", out.message
+    assert drafts() == []
 
     # Cancelling goes through cancel_document: a receipt with a live return waits for it.
     cancel = lambda s, name: run(s, "cancel_document", {  # noqa: E731

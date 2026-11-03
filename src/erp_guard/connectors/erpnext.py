@@ -932,7 +932,9 @@ class ErpNext:
 
     def create_receipt(self, po, lines, *, is_return=False, return_against=None):
         """A receipt mapped from the order (a return from the receipt), with the lines'
-        quantities, then submitted: there's nothing to approve in a receipt."""
+        quantities, inserted already submitted: there's nothing to approve in a receipt.
+        One request does both (Frappe's insert submits a document inserted with docstatus
+        1, in one transaction), so a refusal by ERPNext leaves no draft behind."""
         _one_per_key([(ln.po, ln.item_code) for ln in lines])
         if is_return:
             if not return_against:
@@ -949,9 +951,8 @@ class ErpNext:
                           return_against or po)
         for r in rows:
             r["stock_qty"] = r["qty"] * float(r.get("conversion_factor") or 1)
-        draft.update(items=rows, ignore_pricing_rule=1)
-        doc = self.insert(draft)
-        return self._parse("Purchase Receipt", self.submit("Purchase Receipt", doc["name"]))
+        draft.update(items=rows, ignore_pricing_rule=1, docstatus=1)
+        return self._parse("Purchase Receipt", self.insert(draft))
 
     def create_invoice(self, supplier_id, bill_no, bill_date, lines, remarks):
         """A draft invoice: lines with a receipt are mapped from that receipt, the rest from

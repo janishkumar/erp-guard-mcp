@@ -170,18 +170,13 @@ def test_receive_notes_are_checked_for_instruction_text(erp, policy):
 
 # --- returns ---------------------------------------------------------------------------
 
-def _received(erp, qty=20):
-    return as_user(erp, erp_policy(), RCV).erp.create_receipt(
+def _received(erp, policy, qty=20):
+    return as_user(erp, policy, RCV).erp.create_receipt(
         BIG, [ReceiptLine(BIG, "SALT-TON", D(qty))])
 
 
-def erp_policy():
-    from erp_guard.policy import load_policy
-    return load_policy()
-
-
 def test_return_goods(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     svc = as_user(erp, policy, RCV)
     args = {"receipt": r.id, "lines": [{"item_code": "SALT-TON", "qty": 5}],
             "reason": "damaged on delivery"}
@@ -198,7 +193,7 @@ def test_return_goods(erp, policy):
 
 
 def test_return_more_than_received_blocked(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     svc = as_user(erp, policy, RCV)
     a = lambda q: {"receipt": r.id, "lines": [{"item_code": "SALT-TON", "qty": q}],  # noqa: E731
                    "reason": "wrong goods"}
@@ -228,7 +223,7 @@ def test_return_limit_check_directly():
 
 
 def test_return_needs_role_and_a_submitted_receipt(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     args = {"receipt": r.id, "lines": [{"item_code": "SALT-TON", "qty": 1}], "reason": "x"}
     assert _checks(as_user(erp, policy, REQ).preview("return_goods", args), "role")[0] \
         .level == BLOCK
@@ -243,7 +238,7 @@ def test_return_needs_role_and_a_submitted_receipt(erp, policy):
 
 
 def test_return_reason_is_required(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     with pytest.raises(InvalidArgs):
         as_user(erp, policy, RCV).preview("return_goods", {
             "receipt": r.id, "lines": [{"item_code": "SALT-TON", "qty": 1}]})
@@ -258,7 +253,7 @@ def _cancel(svc, id, reason="entered in error"):
 
 
 def test_cancel_receipt(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     svc = as_user(erp, policy, RCV)
     pack, w, (summary, res) = _cancel(svc, r.id)
     assert not any(x.level == BLOCK for x in res), [x.message for x in res]
@@ -270,7 +265,7 @@ def test_cancel_receipt(erp, policy):
 
 
 def test_cancel_invoiced_receipt_blocked(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     inv = erp.as_user(AP).create_invoice(
         "SUP-HERC", "INV-1", TODAY, [InvoiceLine(BIG, "SALT-TON", D(5), D(10), r.id)], "")
     svc = as_user(erp, policy, RCV)
@@ -285,7 +280,7 @@ def test_cancel_invoiced_receipt_blocked(erp, policy):
 
 
 def test_cancel_receipt_only_by_its_receiver_or_an_approver(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     for user, blocked in ((REQ, True), (MGR, False), ("director@example.com", False)):
         res = _cancel(as_user(erp, policy, user), r.id)[2][1]
         assert any(x.level == BLOCK for x in res) is blocked, (user, res)
@@ -297,7 +292,7 @@ def test_cancel_receipt_only_by_its_receiver_or_an_approver(erp, policy):
 
 
 def test_cancel_receipt_with_live_return_blocked(erp, policy):
-    r = _received(erp)
+    r = _received(erp, policy)
     svc = as_user(erp, policy, RCV)
     ret = svc.erp.create_receipt(BIG, [ReceiptLine(BIG, "SALT-TON", D(1))], is_return=True,
                                  return_against=r.id)
@@ -318,13 +313,24 @@ def test_cancelling_a_return_must_not_put_the_order_over_receipt(erp, policy):
     assert any(x.level == BLOCK and "puts its goods back" in x.message for x in res)
 
 
-def test_cancel_receipt_needs_a_reason_and_existing_receipt(erp, policy):
+def test_cancel_receipt_needs_an_existing_receipt_and_a_clean_reason(erp, policy):
     svc = as_user(erp, policy, RCV)
     assert any(x.level == BLOCK for x in _cancel(svc, "PR-NOPE")[2][1])
-    r = _received(erp)
+    r = _received(erp, policy)
     # The reason is checked for bank details like any free text.
     res = _cancel(svc, r.id, "refund to account number 12345678 please")[2][1]
     assert any(x.level == BLOCK for x in res)
+
+
+def test_cancel_document_without_a_reason_is_invalid(erp, policy):
+    # The generic tool's canonicaliser demands the reason before the pack is reached.
+    r = _received(erp, policy)
+    svc = as_user(erp, policy, RCV)
+    with pytest.raises(InvalidArgs, match="reason"):
+        svc.preview("cancel_document", {"doctype": "Purchase Receipt", "name": r.id})
+    out = svc.execute("cancel_document", {"doctype": "Purchase Receipt", "name": r.id}, "X")
+    assert out.outcome == "refused" and "reason" in out.message
+    assert erp.get_receipt(r.id).state == DocState.SUBMITTED
 
 
 def test_other_receipt_operations_stay_unsupported(erp, policy):

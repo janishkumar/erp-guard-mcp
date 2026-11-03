@@ -208,7 +208,7 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | Competitive quotes | PO create, submit | PO total ≥ $25,000 needs ≥ 3 Supplier Quotations for its items from different suppliers in the last 90 days, or a sole-source reason | block |
 | Sole source | PO approve | A sole-source PO is approved by a director or above | block |
 | Quote price | PO from a quote | PO rate ≤ the quoted rate | block |
-| Over-receipt | receive | Received qty per line ≤ ordered − already received (draft and submitted receipts both count), plus 5% | block |
+| Over-receipt | receive | Received qty per line ≤ ordered − already received (draft and submitted receipts both count, returns subtract), plus the policy tolerance of 5%. ERPNext's own over-receipt allowance (0% at its defaults, which phase 1 keeps) applies as well, so the stricter limit wins: at defaults ERPNext refuses anything over the ordered quantity at submit time, and the receipt is inserted and submitted in one request so a refusal leaves no draft | block |
 | Receipt against approved PO | receive | PO is approved and not closed or cancelled | block |
 | Receiver independence | receive | Receiver is not the PO's approver | block |
 | | receive | Receiver is the PO's requester | warn |

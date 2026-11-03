@@ -9,7 +9,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from conftest import MGR, REQ
+from conftest import MGR, REQ, TODAY
 from fake_erpnext import FakeErpNext, connector
 
 from erp_guard.connectors.base import ErpError
@@ -24,6 +24,7 @@ from erp_guard.packs.p2p.models import (
     ReceiptLine,
     RequestLine,
 )
+from erp_guard.service import Service
 
 D = Decimal
 PO, PR, PI = "PUR-ORD-1", "MAT-PRE-1", "ACC-PINV-1"
@@ -114,7 +115,9 @@ def test_receipt_from_order_keeps_requested_lines_and_submits(fake):
     assert [(i["item_code"], i["qty"], i["received_qty"], i["stock_qty"]) for i in
             sent["items"]] == [("PAPER-A4", 2.0, 2.0, 24.0)]
     assert sent["ignore_pricing_rule"] == 1
-    assert fake.method_calls("frappe.client.submit")[0]["doc"]["name"] == r.id
+    # One request inserts and submits: a refused submit can't leave a draft behind.
+    assert sent["docstatus"] == 1 and len(fake.method_calls("frappe.client.insert")) == 1
+    assert not fake.method_calls("frappe.client.submit")
     assert (r.state, r.lines, r.receiver) == (
         DocState.SUBMITTED, (ReceiptLine(PO, "PAPER-A4", D(2)),), RCV)
 
@@ -123,7 +126,9 @@ def test_return_receipt_is_negative_in_erpnext_positive_in_the_model(fake):
     erp = _erp(fake)
     r = erp.create_receipt(PO, [ReceiptLine(PO, "PAPER-A4", D(1))], is_return=True,
                            return_against=PR)
-    assert _inserted(fake, "Purchase Receipt")["items"][0]["qty"] == -1.0
+    sent = _inserted(fake, "Purchase Receipt")
+    assert sent["items"][0]["qty"] == -1.0 and sent["docstatus"] == 1
+    assert not fake.method_calls("frappe.client.submit")
     assert (r.is_return, r.return_against, r.lines[0].qty) == (True, PR, D(1))
     with pytest.raises(ErpError, match="names the receipt"):
         erp.create_receipt(PO, [], is_return=True)
@@ -517,3 +522,22 @@ def test_memory_refuses_what_erpnext_refuses(erp):
         erp.create_quote("SUP-CANON", [Line("TONER-K", D(1), D(80))], rfq, TODAY)
     with pytest.raises(ErpError, match="bank details are never written"):
         erp.create_change_request("Supplier", "SUP-HERC", {"default_bank_account": "x"})
+
+
+def test_cancel_document_on_a_receipt_runs_the_packs_receipt_checks(fake, policy):
+    """The generic tool reaches the pack: the receipt an approved invoice refers to is
+    refused; one nothing refers to is cancelled by its receiver."""
+    svc = Service(connector(fake), policy, today=lambda: TODAY)
+    args = {"doctype": "Purchase Receipt", "name": PR, "reason": "entered in error"}
+    p = svc.preview("cancel_document", args)
+    msgs = [r for r in p.checks if r.check == "cancel receipt" and r.level == "block"]
+    assert p.code is None and msgs and PI in msgs[0].message
+    fake.add({**CO, "doctype": "Purchase Receipt", "name": "MAT-PRE-2", "docstatus": 1,
+              "owner": RCV, "supplier": SUP, "posting_date": "2026-10-26", "is_return": 0,
+              "items": [_row("Purchase Receipt Item", "PAPER-A4", 1, purchase_order=PO)]})
+    args["name"] = "MAT-PRE-2"
+    p = svc.preview("cancel_document", args)
+    assert p.code, [r.message for r in p.checks if r.level == "block"]
+    out = svc.execute("cancel_document", args, p.code)
+    assert out.outcome == "written", out.message
+    assert fake.docs[("Purchase Receipt", "MAT-PRE-2")]["docstatus"] == 2

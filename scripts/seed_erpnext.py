@@ -99,7 +99,15 @@ SUPPLIER_FIELDS = [
 # below), as on the purchase order, so the approver is ERPNext's own record.
 APPROVER_FIELD = {"fieldname": "erp_guard_approver", "fieldtype": "Data", "label": "Approved by",
                   "allow_on_submit": 1, "read_only": 1}
-PI_FIELDS = [{**APPROVER_FIELD, "insert_after": "bill_date"}]
+# A draft or rejected invoice voided through erp-guard: as on the purchase order, it stays
+# a draft with this flag and the reason, and the workflow offers no transition on it.
+PI_FIELDS = [
+    {**APPROVER_FIELD, "insert_after": "bill_date"},
+    {"fieldname": "erp_guard_reason", "fieldtype": "Small Text", "label": "Cancel reason",
+     "allow_on_submit": 1, "insert_after": "erp_guard_approver"},
+    {"fieldname": "erp_guard_cancelled", "fieldtype": "Check", "label": "Cancelled (draft)",
+     "default": "0", "read_only": 1, "in_list_view": 1, "insert_after": "erp_guard_reason"},
+]
 PE_FIELDS = [{**APPROVER_FIELD, "insert_after": "reference_date"}]
 CC_FIELDS = [
     {"fieldname": "erp_guard_annual_budget", "fieldtype": "Currency", "label": "Annual budget",
@@ -497,10 +505,11 @@ TRANSITIONS = [("Draft", "Submit for Approval", "Pending Approval", False),
 # Purchase orders can also be withdrawn from approval (amend_purchase_order does this before
 # changing a pending order's lines, so it needs resubmitting).
 EXTRA_TRANSITIONS = {"Purchase Order": [("Pending Approval", "Withdraw", "Draft", False)]}
-# Purchase orders: a draft cancelled through erp-guard (erp_guard_cancelled) gets no more
-# transitions. Orders, invoices and payments entering Approved record who approved, in the
-# same transaction.
-CONDITIONS = {"Purchase Order": "not doc.erp_guard_cancelled"}
+# Purchase orders and invoices: a draft cancelled through erp-guard (erp_guard_cancelled)
+# gets no more transitions. Orders, invoices and payments entering Approved record who
+# approved, in the same transaction.
+CONDITIONS = {"Purchase Order": "not doc.erp_guard_cancelled",
+              "Purchase Invoice": "not doc.erp_guard_cancelled"}
 ON_ENTER = {(dt, "Approved"): ("erp_guard_approver", "frappe.session.user")
             for dt in ("Purchase Order", "Purchase Invoice", "Payment Entry")}
 

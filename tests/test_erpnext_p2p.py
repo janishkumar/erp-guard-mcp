@@ -269,10 +269,11 @@ def test_workflow_submit_cancel_and_update(fake):
             saved["items"][0]["rate"]) == ("N-1", "2026-10-31", 2, 42)
     with pytest.raises(ErpError, match="rows"):
         erp.update_draft("Purchase Invoice", "ACC-PINV-3", {"items": []})
-    with pytest.raises(ErpError, match="isn't submitted"):
-        erp.cancel_doc("Purchase Invoice", "ACC-PINV-3", "draft")
     erp.workflow("Purchase Invoice", "ACC-PINV-3", "Submit for Approval")
     assert fake.docs[("Purchase Invoice", "ACC-PINV-3")]["workflow_state"] == "Pending Approval"
+    with pytest.raises(ErpError, match="only a draft or rejected"):
+        erp.cancel_doc("Purchase Invoice", "ACC-PINV-3", "pending")
+    assert not fake.docs[("Purchase Invoice", "ACC-PINV-3")].get("erp_guard_cancelled")
     with pytest.raises(ErpError, match="isn't a draft"):
         erp.update_draft("Purchase Invoice", PI, {"remarks": "x"})
     erp.cancel_doc("Purchase Invoice", PI, "wrong supplier")

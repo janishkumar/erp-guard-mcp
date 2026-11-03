@@ -394,9 +394,12 @@ def _receipt(d: dict, rows: list[dict]) -> Receipt:
 
 
 def _invoice(d: dict, rows: list[dict]) -> Invoice:
+    # A draft voided through erp-guard (erp_guard_cancelled) is cancelled for every check.
+    state = DocState.CANCELLED if d.get("docstatus") == 0 and d.get("erp_guard_cancelled") \
+        else _doc_state(d, True)
     return Invoice(
         d["name"], d["supplier"], d.get("bill_no") or "",
-        _date(d.get("bill_date") or d["posting_date"]), d["owner"], _doc_state(d, True),
+        _date(d.get("bill_date") or d["posting_date"]), d["owner"], state,
         tuple(InvoiceLine(r.get("purchase_order") or "", r["item_code"], abs(_dec(r["qty"])),
                           _dec(r["rate"]), r.get("purchase_receipt") or None) for r in rows),
         approver=d.get("erp_guard_approver") or None, on_hold=bool(d.get("on_hold")),
@@ -436,7 +439,8 @@ _P2P_DOCS: dict[str, tuple[str, str, list[str], list[str], Callable]] = {
     "Purchase Invoice": ("items", "Purchase Invoice Item",
                          ["name", "owner", "docstatus", "workflow_state", "supplier",
                           "bill_no", "bill_date", "posting_date", "erp_guard_approver",
-                          "on_hold", "is_return", "return_against", "is_paid", "remarks"],
+                          "on_hold", "is_return", "return_against", "is_paid", "remarks",
+                          "erp_guard_cancelled"],
                          ["item_code", "qty", "rate", "purchase_order", "purchase_receipt"],
                          _invoice),
     "Payment Entry": ("references", "Payment Entry Reference",
@@ -1049,23 +1053,39 @@ class ErpNext:
 
     def cancel_doc(self, doctype, id, reason):
         """Cancel a submitted document (ERPNext keeps it, cancelled). A purchase order goes
-        through cancel_order, which also handles drafts and stores the reason; for other
-        types the reason is in erp-guard's audit trail."""
+        through cancel_order, which also handles drafts and stores the reason; a draft or
+        rejected purchase invoice is voided the same way (_void_invoice). For other types
+        the reason is in erp-guard's audit trail."""
         if doctype == "Purchase Order":
             self.cancel_order(id, reason)
             return
         d = self._require(doctype, id)
+        if doctype == "Purchase Invoice" and d.get("docstatus") == 0:
+            self._void_invoice(d, reason)
+            return
         if d.get("docstatus") != 1:
             raise ErpError(f"{doctype} {id} isn't submitted; only submitted documents are "
                            "cancelled")
         self.cancel(doctype, id)
+
+    def _void_invoice(self, d: dict, reason: str) -> None:
+        """A draft or rejected invoice can't be cancelled in ERPNext (and erp-guard never
+        deletes): it gets the `erp_guard_cancelled` flag and the reason, and the workflow
+        offers no transition on it any more."""
+        if d.get("erp_guard_cancelled"):
+            raise ErpError(f"Purchase Invoice {d['name']} is already cancelled")
+        if (d.get("workflow_state") or "Draft") not in ("Draft", "Rejected"):
+            raise ErpError(f"Purchase Invoice {d['name']} is {d.get('workflow_state')}; only "
+                           "a draft or rejected invoice is voided")
+        self.c.request("PUT", _res("Purchase Invoice", d["name"]),
+                       body={"erp_guard_cancelled": 1, "erp_guard_reason": reason})
 
     def update_draft(self, doctype, id, fields):
         """Only the fields models.EDITABLE allows. Changed payment allocations also set the
         paid amount to their sum, as create_payment does."""
         check_editable(doctype, fields)
         d = self._require(doctype, id)
-        if d.get("docstatus") != 0:
+        if d.get("docstatus") != 0 or d.get("erp_guard_cancelled"):
             raise ErpError(f"{doctype} {id} isn't a draft")
         doc = dict(d)
         for k, v in _plain(fields).items():

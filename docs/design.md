@@ -213,7 +213,7 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | Receiver independence | receive | Receiver is not the PO's approver | block |
 | | receive | Receiver is the PO's requester | warn |
 | Return limit | return | Returned qty ≤ received qty not already returned | block |
-| Three-way match: quantity | invoice create, update, approve | Invoiced qty per line ≤ received − already invoiced (stock items) or ≤ ordered − already invoiced (non-stock items, two-way match) | block (nothing is written; a mismatched invoice goes back to the supplier, it doesn't enter the ERP) |
+| Three-way match: quantity | invoice create, update, approve | Invoiced qty per line ≤ received − already invoiced (stock items) or ≤ ordered − already invoiced (non-stock items, two-way match). A debit note gives room back on a stock item only up to the quantity returned (a credit for goods kept is a price adjustment); on a service it gives room back, and billing that room again warns ("re-billing credited quantity"). The invoice total check counts credits the same way | block (nothing is written; a mismatched invoice goes back to the supplier, it doesn't enter the ERP) |
 | Three-way match: price | invoice | Invoice rate per line within 2% of the PO rate | block above |
 | Invoice total | invoice | Invoice total + already invoiced ≤ PO total | block |
 | Invoice supplier | invoice | Invoice supplier = PO supplier | block |
@@ -235,7 +235,7 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | Close PO | close | Fully received and invoiced, or a reason is given and the closer is an approver; no draft receipt or invoice references the PO | block |
 | Hold | hold, release | Only invoice approvers; a reason is required. Only approved invoices with something still owed are held (ERPNext holds nothing else). Holds are the controller's discretion (a dispute, a missing document), not the match's failure path | block |
 | Cancel receipt | cancel | No submitted invoice against it (ERPNext also refuses); only receiver or an approver | block |
-| Cancel invoice | cancel | No payment against it; only an invoice approver; reason required | block |
+| Cancel invoice | cancel | No payment against it; only an invoice approver; reason required. A draft or rejected invoice is voided instead (ERPNext can't cancel drafts): flagged `erp_guard_cancelled` with the reason, by the person who entered it or an invoice approver, and from then on it counts for no check and gets no workflow action | block |
 | Cancel payment | cancel | Only a payment approver who isn't the payer; reason required | block |
 | Edit after entry | update | Drafts only, by the person who entered them; every check for the document's create re-runs on the edited version | block |
 

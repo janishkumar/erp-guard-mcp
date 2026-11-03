@@ -370,6 +370,11 @@ class MemoryErp:
         state = self._state(doctype, id)
         if state == DocState.CANCELLED:
             raise ErpError(f"{doctype} {id} is already cancelled")
+        if doctype == "Purchase Invoice" and state in (DocState.DRAFT, DocState.REJECTED):
+            # Voided, as ERPNext's erp_guard_cancelled flag: cancelled for every check.
+            self._set(doctype, id, DocState.CANCELLED)
+            self._keep(doctype, id, reason=reason, erp_guard_cancelled=1)
+            return
         if state not in POSTED:
             raise ErpError(f"{doctype} {id} isn't submitted; only submitted documents are "
                            "cancelled")

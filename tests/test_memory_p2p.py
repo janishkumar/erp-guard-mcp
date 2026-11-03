@@ -210,8 +210,13 @@ def test_cancel_doc(erp):
         erp.cancel_doc("Purchase Receipt", r.id, "again")
     draft = erp.create_invoice("SUP-CANON", "C-1", TODAY,
                                [InvoiceLine(PO, "TONER-K", D(1), D(90))], "")
+    erp.workflow(PI, draft.id, "Submit for Approval")
     with pytest.raises(ErpError, match="submitted"):
-        erp.cancel_doc(PI, draft.id, "a draft isn't cancelled")  # as in ERPNext
+        erp.cancel_doc(PI, draft.id, "a pending invoice isn't cancelled")  # as in ERPNext
+    other = erp.create_invoice("SUP-CANON", "C-2", TODAY,
+                               [InvoiceLine(PO, "TONER-K", D(1), D(90))], "")
+    erp.cancel_doc(PI, other.id, "keyed twice")  # a draft is voided: cancelled, kept
+    assert erp.get_invoice(other.id).state == DocState.CANCELLED
     erp.cancel_doc("Purchase Order", PO, "orders: as cancel_order")
     assert erp.get_order(PO).status == Status.CANCELLED
 

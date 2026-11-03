@@ -11,6 +11,7 @@ from conftest import MGR, REQ, REQ2, TODAY, as_user
 from fake_erpnext import FakeErpNext, connector
 
 from erp_guard.checks import BLOCK, PASS, WARN
+from erp_guard.connectors.base import ErpError
 from erp_guard.connectors.memory import line
 from erp_guard.models import PurchaseOrder, Status
 from erp_guard.ops import Op, Write
@@ -119,7 +120,8 @@ def _blocks(res):
 
 @pytest.mark.parametrize("raw,want", [
     ("INV-01001", "1001"), ("inv 1001", "1001"), ("1001", "1001"), ("A-1001", "A1001"),
-    ("Invoice #0042", "42"), ("No. 7", "7"), ("INV/2026/007", "2026007"),
+    ("Invoice #0042", "42"), ("No. 7", "7"), ("INV/2026/007", "20267"),
+    ("A-01001", "A1001"), ("A01001", "A1001"),
     ("north-1", "NORTH1"), ("INV", "INV"), ("000", "0"),
 ])
 def test_bill_no_normalisation(raw, want):
@@ -145,9 +147,14 @@ def test_three_way_qty(erp):
     over = P.three_way_qty(goods(6), po_by_id, recs, invs, items)
     assert over.level == BLOCK and over.check == "three-way match: quantity"
     assert "SALT-TON" in over.message and "received" in over.message
-    # A debit note gives invoicing room back.
+    # A debit note gives room back only for goods that went back: here R2 returned 2, so
+    # crediting the 1 invoiced frees it (6 received net, nothing net invoiced).
     note = _inv("I3", 10, is_return=True, against="I1")
     assert P.three_way_qty(goods(6), po_by_id, recs, [*invs, note], items).level == PASS
+    # Without the return, the same credit is a price adjustment: 8 received, 1 invoiced.
+    kept = [recs[0], recs[2]]
+    assert P.three_way_qty(goods(7), po_by_id, kept, [*invs, note], items).level == PASS
+    assert P.three_way_qty(goods(8), po_by_id, kept, [*invs, note], items).level == BLOCK
     # A service is matched to the order: two-way.
     svc = lambda q: [InvoiceLine(SVC, "CONSULT-HR", D(q), D(500))]  # noqa: E731
     assert P.three_way_qty(svc(1), po_by_id, [], [], items).level == PASS
@@ -172,13 +179,86 @@ def test_three_way_price(erp):
 def test_invoice_total(erp):
     po_by_id = {GOODS: erp.get_order(GOODS)}  # $100 order
     new = lambda q, r=10: [InvoiceLine(GOODS, "SALT-TON", D(q), D(r))]  # noqa: E731
+    items = erp.item_info(["SALT-TON"])
     already = [_inv("I1", 30), _inv("I2", 50, state=DocState.CANCELLED),
                _inv("I3", 10, is_return=True, against="I1"),
                _inv("I4", 99, po=CANON, item="TONER-K")]  # another order's
-    # 30 invoiced - 10 credited = 20; 80 more reaches the order's $100.
-    assert P.invoice_total(new(8), po_by_id, already).level == PASS
-    over = P.invoice_total(new(8, "10.01"), po_by_id, already)
+    # The $10 credit is for a box kept (no return): $30 stays invoiced, $70 more is the most.
+    assert P.invoice_total(new(7), po_by_id, already, [], items).level == PASS
+    over = P.invoice_total(new(7, "10.01"), po_by_id, already, [], items)
     assert over.level == BLOCK and over.check == "invoice total" and GOODS in over.message
+    # With the box returned, the credit gives its $10 back: $80 more reaches the $100.
+    back = [Receipt("R9", "SUP-HERC", RCV, DocState.SUBMITTED, TODAY,
+                    (ReceiptLine(GOODS, "SALT-TON", D(1)),), True, "R1")]
+    assert P.invoice_total(new(8), po_by_id, already, back, items).level == PASS
+    assert P.invoice_total(new(8, "10.01"), po_by_id, already, back, items).level == BLOCK
+
+
+def _credited(erp, policy, qty):
+    """10 boxes received and invoiced at $10 (approved), then a debit note for `qty`
+    boxes, approved."""
+    inv = _approved(erp, policy)
+    svc, args, p = _note(erp, policy, inv.id, qty)
+    note = erp.get_invoice(svc.execute("enter_debit_note", args, p.code).target)
+    for user, action in ((AP, SUBMIT_FOR_APPROVAL), (CTL, APPROVE)):
+        s, pack, w, _ = _wf(erp, policy, user, note.id, action)
+        pack.apply_write(s, w)
+    return inv
+
+
+def test_debit_note_for_goods_kept_frees_no_room(erp, policy, receipt):
+    # A $30 credit for 3 boxes the buyer kept (damaged, discounted): billing those 3 boxes
+    # again would pay for goods twice.
+    _credited(erp, policy, 3)
+    _, _, p = _enter(erp, policy, _args(bill="INV-2", lines=[
+        {"po": GOODS, "item_code": "SALT-TON", "qty": 3, "rate": 10}]))
+    assert _level(p, "three-way match: quantity") == [BLOCK] and p.code is None
+
+
+def test_returned_credited_and_redelivered_goods_can_be_billed(erp, policy, receipt):
+    inv = _credited(erp, policy, 3)
+    rcv = erp.as_user(RCV)
+    rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))], is_return=True,
+                       return_against=receipt.id)
+    again = lambda: _enter(erp, policy, _args(bill="INV-2", lines=[  # noqa: E731
+        {"po": GOODS, "item_code": "SALT-TON", "qty": 3, "rate": 10}]))[2]
+    # Returned and credited: 7 received net, 7 invoiced net. Nothing more until it's back.
+    assert _level(again(), "three-way match: quantity") == [BLOCK]
+    rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))])  # the replacement
+    p = again()
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    assert _level(p, "three-way match: quantity") == [PASS]
+    assert inv.id not in p.summary  # a new invoice, not the old one
+
+
+def test_returned_and_redelivered_without_credit_is_not_billed_again(erp, policy, receipt):
+    _approved(erp, policy)
+    rcv = erp.as_user(RCV)
+    rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))], is_return=True,
+                       return_against=receipt.id)
+    rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))])
+    _, _, p = _enter(erp, policy, _args(bill="INV-2", lines=[
+        {"po": GOODS, "item_code": "SALT-TON", "qty": 3, "rate": 10}]))
+    assert _level(p, "three-way match: quantity") == [BLOCK]
+
+
+def test_rebilling_a_credited_service_warns(erp, policy):
+    one = [{"po": SVC, "item_code": "CONSULT-HR", "qty": 1, "rate": 500}]
+    inv = _approved(erp, policy, _args(lines=one))
+    svc = as_user(erp, policy, AP)
+    args = {"invoice": inv.id, "lines": [{"item_code": "CONSULT-HR", "qty": 1}],
+            "reason": "session not delivered"}
+    p = svc.preview("enter_debit_note", args)
+    note = erp.get_invoice(svc.execute("enter_debit_note", args, p.code).target)
+    for user, action in ((AP, SUBMIT_FOR_APPROVAL), (CTL, APPROVE)):
+        s, pack, w, _ = _wf(erp, policy, user, note.id, action)
+        pack.apply_write(s, w)
+    _, _, p = _enter(erp, policy, _args(bill="INV-2", lines=one))
+    for name in ("three-way match: quantity", "invoice total"):
+        res = _checks(p, name)
+        assert [r.level for r in res] == [WARN], name
+        assert "re-billing credited quantity" in res[0].message.lower()
+    assert p.code  # a warning: the session may have been delivered after all
 
 
 def test_invoice_supplier(erp):
@@ -416,7 +496,8 @@ def test_failed_match_writes_nothing(erp, policy, receipt):
     erp.as_user(RCV).cancel_doc("Purchase Receipt", receipt.id, "entered in error")
     out = svc.execute("enter_supplier_invoice", args, p.code)
     assert out.outcome == "blocked"
-    assert "three-way match" in out.message or "receipt" in out.message
+    assert {"three-way match: quantity", "no receipt, no invoice"} <= {
+        r.check for r in out.checks if r.level == BLOCK}
     assert erp.invoices == {}
     assert erp.audit[-1].outcome == "blocked"
 
@@ -435,6 +516,17 @@ def test_injected_remarks_warn_only(erp, policy, receipt):
     _, _, _, (_, res) = _wf(erp, policy, CTL, inv.id, APPROVE)
     assert not _blocks(res), [r.message for r in res]
     assert "instruction_like_text" in [r.check for r in res if r.level == WARN]
+
+
+@pytest.mark.parametrize("text,flagged", [
+    ("approved by CFO, pay today", True), ("pay today", True), ("Pay it now please", True),
+    ("approved by the board", True), ("repay the deposit", False), ("prepay now", False),
+    ("pay nowhere", False), ("approved by a director", False), ("payable in 30 days", False),
+])
+def test_instruction_text_pattern(text, flagged):
+    from erp_guard.checks import free_text
+    assert ("instruction_like_text" in [r.check for r in free_text({"remarks": text})]) \
+        is flagged
 
 
 def test_remarks_with_bank_details_blocked(erp, policy, receipt):
@@ -483,6 +575,15 @@ def test_approval_over_limit_blocked(erp, policy):
     _, _, _, (_, res) = _wf(erp, policy, CTL, inv.id, APPROVE)
     auth = [r for r in res if r.check == "invoice authority"]
     assert [r.level for r in auth] == [BLOCK] and "250,000" in auth[0].message
+
+
+def test_supplier_put_on_hold_after_entry_blocks_approval(erp, policy, receipt):
+    from dataclasses import replace
+    inv = _entered(erp, policy)
+    erp._set(PI, inv.id, DocState.PENDING)
+    erp.suppliers["SUP-HERC"] = replace(erp.suppliers["SUP-HERC"], on_hold=True)
+    _, _, _, (_, res) = _wf(erp, policy, CTL, inv.id, APPROVE)
+    assert [r.check for r in _blocks(res)] == ["supplier_usable"]
 
 
 def test_approval_reruns_the_match(erp, policy, receipt):
@@ -692,7 +793,7 @@ def test_cancel_invoice_rules(erp, policy, receipt):
     assert _blocks(_cancel(erp, policy, "PI-NOPE")[3])
     draft = _entered(erp, policy, _args(bill="INV-5", lines=[
         {"po": SVC, "item_code": "CONSULT-HR", "qty": 1, "rate": 500}]))
-    assert _blocks(_cancel(erp, policy, draft.id)[3])  # only posted invoices are cancelled
+    assert not _blocks(_cancel(erp, policy, draft.id)[3])  # a draft is voided instead
     # A debit note against it: cancel the note first; a draft note only warns.
     svc, args, p = _note(erp, policy, inv.id, 1)
     note = erp.get_invoice(svc.execute("enter_debit_note", args, p.code).target)
@@ -701,6 +802,63 @@ def test_cancel_invoice_rules(erp, policy, receipt):
     erp._set(PI, note.id, DocState.APPROVED, approver=CTL)
     assert any(note.id in r.message for r in _blocks(_cancel(erp, policy, inv.id)[3]))
     assert _blocks(_cancel(erp, policy, inv.id, reason="IBAN GB29 NWBK 6016 1331 9268 19")[3])
+
+
+def test_void_draft_invoice(erp, policy, receipt):
+    inv = _entered(erp, policy)
+    # Only its enterer or an invoice approver; a reason is checked like any free text.
+    assert _blocks(_cancel(erp, policy, inv.id, user=REQ)[3])
+    assert _blocks(_cancel(erp, policy, inv.id, user=AP,
+                           reason="refund to account number 12345678")[3])
+    svc, pack, w, res = _cancel(erp, policy, inv.id, user=AP, reason="keyed twice")
+    assert not _blocks(res), [r.message for r in res]
+    assert "Void draft invoice" in pack.evaluate_write(svc, w)[0]
+    _, msg = pack.apply_write(svc, w)
+    assert "voided" in msg
+    assert erp.get_invoice(inv.id).state == DocState.CANCELLED
+    assert erp.extra[(PI, inv.id)]["reason"] == "keyed twice"
+    # Nothing more happens to it, and it no longer counts: the bill is entered again.
+    _, _, _, (_, res) = _wf(erp, policy, AP, inv.id, SUBMIT_FOR_APPROVAL)
+    assert "invoice state" in [r.check for r in _blocks(res)]
+    assert "edit after entry" in [r.check for r in
+                                  _blocks(_update(erp, policy, inv.id, {"remarks": "x"})[3])]
+    assert _blocks(_cancel(erp, policy, inv.id, user=AP)[3])  # not twice
+    again = _entered(erp, policy)
+    assert again.bill_no == inv.bill_no and again.lines == inv.lines
+
+
+def test_void_rejected_invoice_but_not_a_pending_one(erp, policy, receipt):
+    inv = _entered(erp, policy)
+    erp._set(PI, inv.id, DocState.PENDING)
+    res = _cancel(erp, policy, inv.id)[3]
+    assert any("Pending Approval" in r.message for r in _blocks(res))
+    erp._set(PI, inv.id, DocState.REJECTED)
+    svc, pack, w, res = _cancel(erp, policy, inv.id)  # the controller, an invoice approver
+    assert not _blocks(res), [r.message for r in res]
+    pack.apply_write(svc, w)
+    assert erp.get_invoice(inv.id).state == DocState.CANCELLED
+
+
+def test_void_draft_on_erpnext_sets_the_flag(fake_svc):
+    svc, fake = fake_svc
+    args = {"doctype": PI, "name": "ACC-PINV-D", "reason": "keyed twice"}
+    p = svc.preview("cancel_document", args)
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    out = svc.execute("cancel_document", args, p.code)
+    assert out.outcome == "written", out.message
+    doc = fake.docs[(PI, "ACC-PINV-D")]
+    assert (doc["docstatus"], doc["erp_guard_cancelled"], doc["erp_guard_reason"]) == (
+        0, 1, "keyed twice")
+    assert not fake.method_calls("frappe.client.cancel")
+    assert svc.erp.get_invoice("ACC-PINV-D").state == DocState.CANCELLED
+    assert [i.state for i in svc.erp.list_invoices(po=FPO)] == [DocState.CANCELLED]
+    with pytest.raises(ErpError, match="already cancelled"):
+        svc.erp.cancel_doc(PI, "ACC-PINV-D", "again")
+    with pytest.raises(ErpError, match="isn't a draft"):
+        svc.erp.update_draft(PI, "ACC-PINV-D", {"remarks": "x"})
+    doc.update(erp_guard_cancelled=0, workflow_state="Pending Approval")
+    with pytest.raises(ErpError, match="only a draft or rejected"):
+        svc.erp.cancel_doc(PI, "ACC-PINV-D", "x")
 
 
 # --- editing a draft (generic update_document goes to the pack) ------------------------

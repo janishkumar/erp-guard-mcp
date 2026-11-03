@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -158,44 +159,72 @@ def return_limit(receipt: Receipt, returns: list[Receipt], new: list[ReceiptLine
 
 # --- supplier invoices -----------------------------------------------------------------
 
-def _usd(x: Decimal) -> str:
+def usd(x: Decimal) -> str:
     return f"${x:,.2f}"
 
 
-_BILL_SEPARATORS = re.compile(r"[\s\-_/.#]")
+_BILL_SEPARATORS = re.compile(r"[\s\-_/.#]+")
 _BILL_PREFIX = re.compile(r"^(?:INVOICE|INV|NO)+(?=\d)")
+_LEADING_ZEROS = re.compile(r"(?<!\d)0+(?=\d)")
 
 
 def normalise_bill_no(s: str) -> str:
     """A supplier's invoice number as compared for duplicates: upper case, without spaces
     and punctuation, without a leading INV / INVOICE / NO before the digits, and without
-    leading zeros. "INV-01001", "inv 1001" and "1001" are all "1001"."""
-    t = _BILL_SEPARATORS.sub("", (s or "").upper())
-    t = _BILL_PREFIX.sub("", t)
-    return t.lstrip("0") or ("0" if t else "")
+    leading zeros on any run of digits. "INV-01001", "inv 1001" and "1001" are all "1001";
+    "A-01001" and "A-1001" are both "A1001"."""
+    parts = _BILL_SEPARATORS.split((s or "").upper())
+    t = "".join(_LEADING_ZEROS.sub("", part) for part in parts)
+    return _BILL_PREFIX.sub("", t)
 
 
 def _live_invoices(invoices: list[Invoice]) -> list[Invoice]:
     return [i for i in invoices if i.state != DocState.CANCELLED]
 
 
-def _invoiced_qty(invoices: list[Invoice]) -> dict[tuple[str, str], Decimal]:
-    """Quantity invoiced per (PO, item): invoices of every state but cancelled add, debit
-    notes subtract."""
-    out: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
-    for inv in _live_invoices(invoices):
-        sign = -1 if inv.is_return else 1
-        for ln in inv.lines:
-            out[(ln.po, ln.item_code)] += sign * ln.qty
-    return out
+@dataclass(frozen=True)
+class Invoiced:
+    """What is already invoiced of one (PO, item), net of the debit notes that give room
+    back. `qty`/`amount` count every such credit; `strict_qty`/`strict_amount` leave out the
+    credits on services, so a new invoice that needs those credits can be flagged."""
+
+    qty: Decimal = Decimal(0)
+    amount: Decimal = Decimal(0)
+    strict_qty: Decimal = Decimal(0)
+    strict_amount: Decimal = Decimal(0)
 
 
-def _invoiced_amount(invoices: list[Invoice]) -> dict[str, Decimal]:
-    out: dict[str, Decimal] = defaultdict(Decimal)
+def invoiced(invoices: list[Invoice], receipts: list[Receipt],
+             items: dict[str, ItemInfo]) -> dict[tuple[str, str], Invoiced]:
+    """Per (PO, item): invoices of every state but cancelled add. A debit note gives room
+    back only where the goods went back: for a stock item, credited quantity counts up to
+    the quantity on posted returns (a credit for goods kept is a price adjustment, not room
+    to bill them again), at the credit's average rate. For a service, credits count in
+    full, but outside the strict figures."""
+    billed_q: dict = defaultdict(Decimal)
+    billed_a: dict = defaultdict(Decimal)
+    credit_q: dict = defaultdict(Decimal)
+    credit_a: dict = defaultdict(Decimal)
     for inv in _live_invoices(invoices):
-        sign = -1 if inv.is_return else 1
+        q, a = (credit_q, credit_a) if inv.is_return else (billed_q, billed_a)
         for ln in inv.lines:
-            out[ln.po] += sign * ln.amount
+            q[(ln.po, ln.item_code)] += ln.qty
+            a[(ln.po, ln.item_code)] += ln.amount
+    returned: dict = defaultdict(Decimal)
+    for r in receipts:
+        if r.is_return and r.state in POSTED:
+            for ln in r.lines:
+                returned[(ln.po, ln.item_code)] += ln.qty
+    out = {}
+    for key in set(billed_q) | set(credit_q):
+        cq, ca = credit_q.get(key, Decimal(0)), credit_a.get(key, Decimal(0))
+        bq, ba = billed_q.get(key, Decimal(0)), billed_a.get(key, Decimal(0))
+        if is_stock(items, key[1]):
+            back = min(cq, returned.get(key, Decimal(0)))
+            back_a = ca * back / cq if cq else Decimal(0)
+            out[key] = Invoiced(bq - back, ba - back_a, bq - back, ba - back_a)
+        else:
+            out[key] = Invoiced(bq - cq, ba - ca, bq, ba)
     return out
 
 
@@ -251,13 +280,15 @@ def three_way_qty(lines: list[InvoiceLine], po_by_id: dict[str, PurchaseOrder | 
                   receipts: list[Receipt], invoices: list[Invoice],
                   items: dict[str, ItemInfo]) -> CheckResult:
     """Per (PO, item): stock items up to what was received less what is already invoiced;
-    services (non-stock) up to what was ordered less what is already invoiced."""
+    services (non-stock) up to what was ordered less what is already invoiced (see
+    `invoiced` for how debit notes count). Billing a service again on room a debit note
+    freed warns."""
     name = "three-way match: quantity"
-    received, invoiced = received_qty(receipts), _invoiced_qty(invoices)
+    received, done = received_qty(receipts), invoiced(invoices, receipts, items)
     new: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
     for ln in lines:
         new[(ln.po, ln.item_code)] += ln.qty
-    problems, bad = [], []
+    problems, bad, rebill = [], [], []
     for (ref, item), qty in sorted(new.items()):
         po = po_by_id.get(ref)
         if po is None:
@@ -269,16 +300,24 @@ def three_way_qty(lines: list[InvoiceLine], po_by_id: dict[str, PurchaseOrder | 
             continue
         stock = is_stock(items, item)
         base = received.get((ref, item), Decimal(0)) if stock else ordered[item]
-        left = base - invoiced.get((ref, item), Decimal(0))
+        so_far = done.get((ref, item), Invoiced())
+        left = base - so_far.qty
         if qty > left:
             what = "received" if stock else "ordered"
             problems.append(f"{item} on {ref}: invoicing {_qty(qty)} but only "
                             f"{_qty(max(left, Decimal(0)))} of {_qty(base)} {what} is not "
                             "yet invoiced")
             bad.append(item)
+        elif qty > base - so_far.strict_qty:
+            rebill.append(f"{item} on {ref}")
     if problems:
         return CheckResult(name, BLOCK, "; ".join(problems) + ". A mismatched invoice goes "
                            "back to the supplier; nothing is entered.", {"items": bad})
+    if rebill:
+        return CheckResult(name, WARN, "Re-billing credited quantity: "
+                           + ", ".join(rebill) + " was billed and credited by a debit note "
+                           "before; check the service was delivered again.",
+                           {"rebilled": rebill})
     return CheckResult(name, PASS, "Within what was received (stock items) or ordered "
                        "(services) and not yet invoiced.")
 
@@ -294,8 +333,8 @@ def three_way_price(lines: list[InvoiceLine], po_by_id: dict[str, PurchaseOrder 
             continue
         limit = rate * (1 + pct / 100)
         if ln.rate > limit:
-            problems.append(f"{ln.item_code} on {ln.po} at {_usd(ln.rate)} against the order's "
-                            f"{_usd(rate)} (at most {_usd(limit)}, {_qty(pct)}% over)")
+            problems.append(f"{ln.item_code} on {ln.po} at {usd(ln.rate)} against the order's "
+                            f"{usd(rate)} (at most {usd(limit)}, {_qty(pct)}% over)")
             bad.append(ln.item_code)
     if problems:
         return CheckResult(name, BLOCK, "; ".join(problems) + ".", {"items": bad})
@@ -303,24 +342,36 @@ def three_way_price(lines: list[InvoiceLine], po_by_id: dict[str, PurchaseOrder 
 
 
 def invoice_total(lines: list[InvoiceLine], po_by_id: dict[str, PurchaseOrder | None],
-                  invoices: list[Invoice]) -> CheckResult:
-    """Per order: this invoice's lines plus what is already invoiced (less debit notes) stay
-    within the order's total."""
+                  invoices: list[Invoice], receipts: list[Receipt],
+                  items: dict[str, ItemInfo]) -> CheckResult:
+    """Per order: this invoice's lines plus what is already invoiced stay within the
+    order's total. Debit notes count as in `invoiced`: on stock items only for goods that
+    went back; re-billing a service's credited amount warns."""
     name = "invoice total"
-    already = _invoiced_amount(invoices)
+    already: dict[str, Decimal] = defaultdict(Decimal)
+    strict: dict[str, Decimal] = defaultdict(Decimal)
+    for (ref, _), inv in invoiced(invoices, receipts, items).items():
+        already[ref] += inv.amount
+        strict[ref] += inv.strict_amount
     new: dict[str, Decimal] = defaultdict(Decimal)
     for ln in lines:
         new[ln.po] += ln.amount
-    problems = []
+    problems, rebill = [], []
     for ref, amount in sorted(new.items()):
         po = po_by_id.get(ref)
         if po is None:
             continue
-        total = already.get(ref, Decimal(0)) + amount
+        total = already[ref] + amount
         if total > po.total:
-            problems.append(f"{ref}: {_usd(amount)} on this invoice and "
-                            f"{_usd(already.get(ref, Decimal(0)))} already invoiced make "
-                            f"{_usd(total)} against an order of {_usd(po.total)}")
+            problems.append(f"{ref}: {usd(amount)} on this invoice and "
+                            f"{usd(already[ref])} already invoiced make "
+                            f"{usd(total)} against an order of {usd(po.total)}")
+        elif strict[ref] + amount > po.total:
+            rebill.append(ref)
+    if rebill and not problems:
+        return CheckResult(name, WARN, "Re-billing credited quantity: within "
+                           f"{', '.join(rebill)}'s total only because of a debit note on a "
+                           "service.", {"rebilled": rebill})
     if problems:
         return CheckResult(name, BLOCK, "; ".join(problems) + ".")
     return CheckResult(name, PASS, "Within each order's total.")
@@ -377,11 +428,11 @@ def duplicate_invoice(supplier_id: str, bill_no: str, total: Decimal, bill_date:
             continue
         days = abs((i.bill_date - bill_date).days)
         if i.total == total and days <= p.dup_amount_days:
-            near.append(f"{i.id} ({i.bill_no}, same total {_usd(total)}, {days} days apart)")
+            near.append(f"{i.id} ({i.bill_no}, same total {usd(total)}, {days} days apart)")
         elif days <= p.near_days and i.total != total and (
                 abs(i.total - total) <= p.near_pct / 100 * max(i.total, total)
                 or _digits_key(i.total) == _digits_key(total)):
-            near.append(f"{i.id} ({i.bill_no}, {_usd(i.total)} against {_usd(total)}, "
+            near.append(f"{i.id} ({i.bill_no}, {usd(i.total)} against {usd(total)}, "
                         f"{days} days apart)")
     if near:
         out.append(CheckResult("duplicate invoice: amount", WARN,
@@ -440,10 +491,10 @@ def invoice_authority(actor: str, inv: Invoice, policy: Policy) -> CheckResult:
         return CheckResult(name, BLOCK, f"{actor} can't approve supplier invoices.")
     if inv.total > limit:
         need = policy.required_tier(inv.total, "purchase_invoice")
-        return CheckResult(name, BLOCK, f"{inv.id} totals {_usd(inv.total)}; {actor}'s "
-                           f"invoice limit is {_usd(limit)}. Needs a {need.name}.",
+        return CheckResult(name, BLOCK, f"{inv.id} totals {usd(inv.total)}; {actor}'s "
+                           f"invoice limit is {usd(limit)}. Needs a {need.name}.",
                            {"limit": str(limit), "total": str(inv.total)})
-    return CheckResult(name, PASS, f"Within {actor}'s invoice limit of {_usd(limit)}.")
+    return CheckResult(name, PASS, f"Within {actor}'s invoice limit of {usd(limit)}.")
 
 
 def debit_note_limit(original: Invoice, notes: list[Invoice], new_total: Decimal
@@ -455,11 +506,11 @@ def debit_note_limit(original: Invoice, notes: list[Invoice], new_total: Decimal
                     if n.is_return and n.return_against == original.id), Decimal(0))
     left = original.total - credited
     if new_total > left:
-        return CheckResult(name, BLOCK, f"A debit note of {_usd(new_total)} against "
-                           f"{original.id} ({_usd(original.total)}, {_usd(credited)} already "
-                           f"credited) is more than the {_usd(left)} left.",
+        return CheckResult(name, BLOCK, f"A debit note of {usd(new_total)} against "
+                           f"{original.id} ({usd(original.total)}, {usd(credited)} already "
+                           f"credited) is more than the {usd(left)} left.",
                            {"left": str(left)})
-    return CheckResult(name, PASS, f"Within the {_usd(left)} of {original.id} not yet "
+    return CheckResult(name, PASS, f"Within the {usd(left)} of {original.id} not yet "
                        "credited.")
 
 

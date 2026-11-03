@@ -228,7 +228,7 @@ _INSTRUCTION = re.compile(
     r"ignore (all |any )?(previous|prior|above)|disregard|system\s*:|assistant\s*:|"
     r"approve (this|it|immediately|now)|skip (the )?(check|preview|approval)|"
     r"confirmation code|you (must|should) now|new instructions|"
-    r"(already )?approved by (the )?(cfo|ceo|board)\b|pay (this |it )?(today|now|immediately)",
+    r"\bapproved by (the )?(cfo|ceo|board)\b|\bpay (this |it )?(today|now|immediately)\b",
     re.IGNORECASE,
 )
 _IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b")

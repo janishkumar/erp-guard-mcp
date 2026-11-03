@@ -52,12 +52,8 @@ def _unsupported(svc: Service) -> list[C.CheckResult]:
     return [_block("connector", f"{svc.erp.name} doesn't support supplier invoices yet.")]
 
 
-def _usd(x: Decimal) -> str:
-    return f"${x:,.2f}"
-
-
 def _describe(lines) -> str:
-    return ", ".join(f"{ln.qty.normalize():f} x {ln.item_code} @ {_usd(ln.rate)}"
+    return ", ".join(f"{ln.qty.normalize():f} x {ln.item_code} @ {P.usd(ln.rate)}"
                      + (f" ({ln.po})" if getattr(ln, "po", "") else "") for ln in lines)
 
 
@@ -153,15 +149,20 @@ def _context(svc: Service, pos, codes, exclude: str | None = None) -> _Context:
 
 def _receipt_left(r: Receipt, po: str, item: str, ctx: _Context) -> Decimal:
     """What a receipt brought in of (po, item), less posted returns against it and less
-    what live invoices (net of debit notes) already match to it."""
-    got = sum((ln.qty for ln in r.lines if (ln.po, ln.item_code) == (po, item)), Decimal(0))
-    back = sum((ln.qty for x in ctx.receipts if x.is_return and x.return_against == r.id
-                and x.state in POSTED for ln in x.lines
-                if (ln.po, ln.item_code) == (po, item)), Decimal(0))
-    billed = sum(((-1 if i.is_return else 1) * ln.qty for i in ctx.invoices
-                  if i.state != DocState.CANCELLED for ln in i.lines
-                  if (ln.po, ln.item_code, ln.receipt) == (po, item, r.id)), Decimal(0))
-    return got - back - billed
+    what live invoices already match to it. Debit notes on it give room back only up to
+    the goods returned (as in checks.invoiced)."""
+    def on(lines) -> Decimal:
+        return sum((ln.qty for ln in lines if (ln.po, ln.item_code) == (po, item)),
+                   Decimal(0))
+    got = on(r.lines)
+    back = sum((on(x.lines) for x in ctx.receipts if x.is_return
+                and x.return_against == r.id and x.state in POSTED), Decimal(0))
+    live = [i for i in ctx.invoices if i.state != DocState.CANCELLED]
+    billed = sum((on(ln for ln in i.lines if ln.receipt == r.id) for i in live
+                  if not i.is_return), Decimal(0))
+    credited = sum((on(ln for ln in i.lines if ln.receipt == r.id) for i in live
+                    if i.is_return), Decimal(0))
+    return got - back - (billed - min(credited, back))
 
 
 def _match_receipts(rows: list[dict], ctx: _Context) -> list[InvoiceLine]:
@@ -206,11 +207,12 @@ def _invoice_checks(svc: Service, inv: Invoice, ctx: _Context) -> list[C.CheckRe
     lines = list(inv.lines)
     others = [i for i in svc.erp.list_invoices(supplier_id=inv.supplier_id) if i.id != inv.id]
     return [
+        C.supplier_usable(svc.erp.get_supplier(inv.supplier_id), inv.supplier_id),
         P.invoice_po_state(ctx.po_by_id),
         P.invoice_supplier(inv.supplier_id, ctx.po_by_id),
         P.three_way_qty(lines, ctx.po_by_id, ctx.receipts, ctx.invoices, ctx.items),
         P.three_way_price(lines, ctx.po_by_id, svc.policy.invoice.price_tolerance_pct),
-        P.invoice_total(lines, ctx.po_by_id, ctx.invoices),
+        P.invoice_total(lines, ctx.po_by_id, ctx.invoices, ctx.receipts, ctx.items),
         P.receipt_required(lines, ctx.items, ctx.receipts),
         *P.duplicate_invoice(inv.supplier_id, inv.bill_no, inv.total, inv.bill_date, others,
                              svc.policy),
@@ -246,11 +248,10 @@ def _eval_enter(svc: Service, canon: dict) -> Result:
     if (bad := _unsupported(svc)):
         return summary, bad
     inv, ctx = _proposed(svc, canon)
-    res = [P.role_allowed(actor, svc.policy, "ap", "enter supplier invoices"),
-           C.supplier_usable(svc.erp.get_supplier(inv.supplier_id), inv.supplier_id)]
+    res = [P.role_allowed(actor, svc.policy, "ap", "enter supplier invoices")]
     res += _invoice_checks(svc, inv, ctx)
     return (f"Enter invoice {inv.bill_no} dated {inv.bill_date.isoformat()} from "
-            f"{inv.supplier_id}: {_describe(inv.lines)}; total {_usd(inv.total)}. A draft, "
+            f"{inv.supplier_id}: {_describe(inv.lines)}; total {P.usd(inv.total)}. A draft, "
             f"entered by {actor}; it needs submitting for approval and an invoice "
             "approver's approval before it can be paid."), res
 
@@ -260,7 +261,7 @@ def _write_enter(svc: Service, canon: dict) -> tuple[str, str]:
     made = svc.erp.create_invoice(inv.supplier_id, inv.bill_no, inv.bill_date,
                                   list(inv.lines), inv.remarks)
     return made.id, (f"Invoice {inv.bill_no} entered as draft {made.id} "
-                     f"({_usd(made.total)}). Next: Submit for Approval.")
+                     f"({P.usd(made.total)}). Next: Submit for Approval.")
 
 
 # --- enter_debit_note ------------------------------------------------------------------
@@ -336,7 +337,7 @@ def _eval_note(svc: Service, canon: dict) -> Result:
     if lines:
         total = sum((ln.amount for ln in lines), Decimal(0))
         summary = (f"Enter a debit note against {ref}: {_describe(lines)}; total "
-                   f"{_usd(total)}. A draft; it is approved like an invoice and reduces "
+                   f"{P.usd(total)}. A draft; it is approved like an invoice and reduces "
                    f"what is owed on {ref}.")
     return summary, res
 
@@ -346,7 +347,7 @@ def _write_note(svc: Service, canon: dict) -> tuple[str, str]:
     lines, _ = _note_lines_on(orig, canon["lines"])
     note = svc.erp.create_debit_note(orig.id, lines, canon["reason"])
     return note.id, (f"Debit note {note.id} entered against {orig.id} "
-                     f"({_usd(note.total)}). Next: Submit for Approval.")
+                     f"({P.usd(note.total)}). Next: Submit for Approval.")
 
 
 # --- hold_invoice / release_invoice ----------------------------------------------------
@@ -406,7 +407,7 @@ def evaluate_workflow(svc: Service, w: Write) -> Result:
     if inv is None:
         return summary, [_block("invoice state", f"No purchase invoice '{ref}'.")]
     kind = "debit note" if inv.is_return else "invoice"
-    summary = f"Apply '{action}' to {kind} {ref} ({_usd(inv.total)}) as {actor}."
+    summary = f"Apply '{action}' to {kind} {ref} ({P.usd(inv.total)}) as {actor}."
     comment = _free_text({"comment": w.reason})
     if action == SUBMIT_FOR_APPROVAL:
         res = [P.role_allowed(actor, svc.policy, "ap", f"submit a {kind} for approval"),
@@ -515,11 +516,13 @@ def evaluate_update(svc: Service, w: Write) -> Result:
         res.append(C.CheckResult(name, C.PASS, f"{ref} is a draft entered by {svc.actor}."))
     res += _existing_checks(svc, edited)[0]
     return (f"Update draft invoice {ref}: {_describe(edited.lines)}; total "
-            f"{_usd(edited.total)} (was {_usd(inv.total)})."), res
+            f"{P.usd(edited.total)} (was {P.usd(inv.total)})."), res
 
 
 def apply_update(svc: Service, w: Write) -> tuple[str, str]:
     fields = dict(w.fields)
+    if isinstance(fields.get("bill_no"), str):  # as checked: without surrounding spaces
+        fields["bill_no"] = fields["bill_no"].strip()
     if "items" in fields:  # numbers as numbers for the ERP
         fields["items"] = [{k: Decimal(str(v)) for k, v in row.items()}
                            for row in fields["items"]]
@@ -528,6 +531,24 @@ def apply_update(svc: Service, w: Write) -> tuple[str, str]:
 
 
 # --- cancel an invoice (reached through cancel_document) -------------------------------
+
+def _evaluate_void(svc: Service, inv: Invoice, w: Write) -> Result:
+    """A draft or rejected invoice can't be cancelled in ERPNext and erp-guard never deletes:
+    it is voided instead (flagged cancelled, kept on record, no further workflow action),
+    by the person who entered it or an invoice approver."""
+    actor, name = svc.actor, "cancel invoice"
+    kind = "debit note" if inv.is_return else "invoice"
+    summary = (f"Void draft {kind} {inv.id} ({P.usd(inv.total)}). Nothing is deleted; it stays "
+               "on record as a cancelled draft and can't be submitted any more.")
+    if actor != inv.entered_by and \
+            svc.policy.approver_limit(actor, "purchase_invoice") is None:
+        res = [_block(name, f"Only {inv.entered_by}, who entered {inv.id}, or an invoice "
+                      "approver can void it.")]
+    else:
+        res = [C.CheckResult(name, C.PASS, f"{inv.id} is {inv.state.value}; {actor} can "
+                             "void it.")]
+    return summary, res + _free_text({"reason": w.reason})
+
 
 def evaluate_cancel(svc: Service, w: Write) -> Result:
     actor, ref = svc.actor, w.name
@@ -539,10 +560,14 @@ def evaluate_cancel(svc: Service, w: Write) -> Result:
     inv = svc.erp.get_invoice(ref)
     if inv is None:
         return summary, [_block(name, f"No purchase invoice '{ref}'.")]
+    if inv.state in (DocState.DRAFT, DocState.REJECTED):
+        return _evaluate_void(svc, inv, w)
     res: list[C.CheckResult] = []
-    if inv.state not in POSTED:
-        res.append(_block(name, f"{ref} is {inv.state.value}; only an approved invoice is "
-                          "cancelled."))
+    if inv.state == DocState.PENDING:
+        res.append(_block(name, f"{ref} is Pending Approval; an invoice approver rejects it "
+                          "first, then it can be voided."))
+    elif inv.state not in POSTED:
+        res.append(_block(name, f"{ref} is already {inv.state.value}."))
     if svc.policy.approver_limit(actor, "purchase_invoice") is None:
         res.append(_block(name, f"Only an invoice approver cancels an invoice; {actor} "
                           "isn't one."))
@@ -570,8 +595,10 @@ def evaluate_cancel(svc: Service, w: Write) -> Result:
 
 
 def apply_cancel(svc: Service, w: Write) -> tuple[str, str]:
+    draft = svc.erp.get_invoice(w.name).state not in POSTED
     svc.erp.cancel_doc(INVOICE, w.name, w.reason)
-    return w.name, f"{INVOICE} {w.name} cancelled. Reason: {w.reason}"
+    what = "voided (a cancelled draft, kept on record)" if draft else "cancelled"
+    return w.name, f"{INVOICE} {w.name} {what}. Reason: {w.reason}"
 
 
 # --- the actions -----------------------------------------------------------------------

@@ -335,6 +335,8 @@ def test_live_workflows_exist():
     pi_flow = svc("AP").erp.get_meta("Purchase Invoice")["__workflow_docs"][0]
     assert {t["allowed"] for t in pi_flow["transitions"] if t["action"] == "Approve"} == {
         "Accounts Manager", "Purchase Manager"}
+    assert {t.get("condition") for t in pi_flow["transitions"]} == {
+        "not doc.erp_guard_cancelled"}
     req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
     when = (date.today() + timedelta(days=14)).isoformat()
     mr = req.insert({"doctype": "Material Request", "material_request_type": "Purchase",
@@ -686,6 +688,9 @@ def test_live_invoice_match_and_hold(created, undo):
     assert out.outcome == "written", out.message
     note_id = out.target
     undo.append((ctl.erp, PI, note_id))
+    # The note's rows keep their order, so the order's invoice list (and its checks) see it.
+    assert [r.get("purchase_order") for r in ap.erp.get_doc(PI, note_id)["items"]] == [po]
+    assert note_id in [i.id for i in ap.erp.list_invoices(po=po)]
     for s, action in ((ap, SUBMIT_FOR_APPROVAL), (ctl, APPROVE)):
         out = run(s, "workflow_action", {"doctype": PI, "name": note_id, "action": action})[1]
         assert out.outcome == "written", out.message
@@ -699,6 +704,33 @@ def test_live_invoice_match_and_hold(created, undo):
     assert cancel(ctl, note_id)[1].outcome == "written"
     assert cancel(ctl, inv_id)[1].outcome == "written"
     assert ctl.erp.get_invoice(inv_id).state == DocState.CANCELLED
+
+
+def test_live_void_draft_invoice(created):
+    """A draft invoice keyed by mistake is voided through cancel_document: it stays a
+    draft with the erp_guard_cancelled flag and the reason, the workflow offers nothing on
+    it, and the same bill number is then entered again. Both drafts end voided."""
+    po = _approved_order(created, [Line("HVAC-SVC", D(1), D(640))])
+    ap = svc("AP")
+    args = {"supplier": "TRANE U.S. INC", "bill_no": f"VOID-{uuid.uuid4().hex[:6]}",
+            "bill_date": date.today().isoformat(),
+            "lines": [{"po": po, "item_code": "HVAC-SVC", "qty": 1, "rate": 640}]}
+    first = run(ap, "enter_supplier_invoice", args)[1]
+    assert first.outcome == "written", first.message
+    p = ap.preview("enter_supplier_invoice", args)
+    assert p.code is None  # the same number again, while the first is live
+    void = lambda name: run(ap, "cancel_document", {  # noqa: E731
+        "doctype": PI, "name": name, "reason": "keyed twice"})[1]
+    out = void(first.target)
+    assert out.outcome == "written", out.message
+    doc = ap.erp.get_doc(PI, first.target)
+    assert (doc["docstatus"], doc["erp_guard_cancelled"], doc["erp_guard_reason"]) == (
+        0, 1, "keyed twice")
+    assert ap.erp.get_invoice(first.target).state == DocState.CANCELLED
+    assert ap.erp.transitions(PI, first.target) == []
+    again = run(ap, "enter_supplier_invoice", args)[1]
+    assert again.outcome == "written", again.message
+    assert void(again.target).outcome == "written"
 
 
 def test_live_p2p_requests_and_quotes(undo):

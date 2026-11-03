@@ -270,6 +270,9 @@ def _eval_cancel(svc: Service, canon: dict) -> Result:
     actor, ref = svc.actor, canon["po"]
     order = svc.erp.get_order(ref)
     res = [C.state(order, ref, LIVE_STATUSES | {Status.REJECTED}, "cancelling")]
+    if order is not None and order.closed:  # closed stays "approved": say so
+        res = [C.CheckResult("state", C.BLOCK, f"{ref} is closed; a closed order is neither "
+                             "cancelled nor amended.")]
     if order is not None and order.requester != actor and \
             svc.policy.approver_limit(actor) is None:
         res.append(C.CheckResult("ownership", C.BLOCK,

@@ -926,3 +926,75 @@ def quote_price(order: PurchaseOrder, quotes_by_id: dict[str, Quote | None],
         return CheckResult(name, BLOCK, "; ".join(problems) + ".",
                            {"quotations": list(order.quotations)})
     return CheckResult(name, PASS, "Every rate is at or below the quoted rate.")
+
+
+# --- closing a purchase order ----------------------------------------------------------
+
+def close_po_state(po: PurchaseOrder | None, ref: str) -> CheckResult:
+    name = "state"
+    if po is None:
+        return CheckResult(name, BLOCK, f"No purchase order '{ref}'.")
+    if po.status != Status.APPROVED or po.closed:
+        now = "closed" if po.closed and po.status == Status.APPROVED else po.status.value
+        return CheckResult(name, BLOCK, f"{po.id} is {now}; closing needs an approved, open "
+                           "order.")
+    return CheckResult(name, PASS, f"{po.id} is approved and open.")
+
+
+def close_po(actor: str, po: PurchaseOrder, receipts: list[Receipt], invoices: list[Invoice],
+             items: dict[str, ItemInfo], policy: Policy, reason: str) -> CheckResult:
+    """An order is closed when nothing is still on its way and either it is complete or an
+    approver says why it isn't.
+
+    Receipts and invoices (debit notes too) that are neither posted nor cancelled are open
+    work: drafts, pending approval and rejected ones (a rejected document can still be
+    revised and resubmitted), so any of them blocks, failing closed. Complete means the
+    three-way match has nothing left to do, by the same arithmetic: a stock item is
+    received (posted receipts less returns) up to the ordered quantity and everything
+    received is invoiced; a service is invoiced up to the ordered quantity. A complete
+    order is closed by its requester or any PO approver. An incomplete one needs a reason
+    and an approver."""
+    name = "close"
+    open_rcv = sorted(r.id for r in receipts
+                      if r.state not in POSTED and r.state != DocState.CANCELLED)
+    open_inv = sorted(i.id for i in invoices
+                      if i.state not in POSTED and i.state != DocState.CANCELLED)
+    if open_rcv or open_inv:
+        what = [f"receipt(s) {', '.join(open_rcv)}" if open_rcv else "",
+                f"invoice(s) {', '.join(open_inv)}" if open_inv else ""]
+        return CheckResult(name, BLOCK,
+                           f"{po.id} still has unposted {' and '.join(w for w in what if w)}"
+                           "; post or cancel them first.",
+                           {"receipts": open_rcv, "invoices": open_inv})
+    received, done = received_qty(receipts), invoiced(invoices, receipts, items)
+    outstanding = []
+    for item, ordered in sorted(_per_item(po.lines).items()):
+        billed = done.get((po.id, item), Invoiced()).qty
+        if is_stock(items, item):
+            got = received.get((po.id, item), Decimal(0))
+            if got < ordered:
+                outstanding.append(f"{item}: received {_qty(got)} of {_qty(ordered)}")
+            if billed < got:
+                outstanding.append(f"{item}: invoiced {_qty(billed)} of {_qty(got)} received "
+                                   f"({_qty(ordered)} ordered)")
+        elif billed < ordered:
+            outstanding.append(f"{item}: invoiced {_qty(billed)} of {_qty(ordered)}")
+    approver = policy.approver_limit(actor, "purchase_order") is not None
+    if not outstanding:
+        if actor == po.requester or approver:
+            return CheckResult(name, PASS, f"{po.id} is fully received and invoiced; "
+                               f"{actor} can close it.")
+        return CheckResult(name, BLOCK, f"Only the requester or an approver can close {po.id}; "
+                           f"{actor} is neither.", {"requester": po.requester})
+    left = "; ".join(outstanding)
+    problems = []
+    if not approver:
+        problems.append("only an approver can close an order that isn't fully received and "
+                        f"invoiced, and {actor} isn't one")
+    if not reason.strip():
+        problems.append("a reason is needed")
+    if problems:
+        return CheckResult(name, BLOCK, f"{po.id} isn't fully received and invoiced ({left}): "
+                           + "; ".join(problems) + ".", {"outstanding": outstanding})
+    return CheckResult(name, WARN, f"{po.id} is closed with work outstanding ({left}). "
+                       f"Reason given: {reason.strip()}", {"outstanding": outstanding})

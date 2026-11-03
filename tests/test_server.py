@@ -22,8 +22,8 @@ WRITES = {"create_purchase_order", "onboard_supplier", "submit_for_approval",
           "amend_purchase_order", "raise_purchase_request", "request_quotes",
           "enter_supplier_quote", "receive_goods", "return_goods",
           "enter_supplier_invoice", "enter_debit_note", "hold_invoice", "release_invoice",
-          "pay_supplier", "create_document", "update_document", "submit_document",
-          "workflow_action", "cancel_document", "amend_document"}
+          "pay_supplier", "close_purchase_order", "create_document", "update_document",
+          "submit_document", "workflow_action", "cancel_document", "amend_document"}
 GENERIC_WRITES = {"create_document", "update_document", "submit_document", "workflow_action",
                   "cancel_document", "amend_document"}
 

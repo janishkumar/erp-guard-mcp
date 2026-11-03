@@ -87,7 +87,7 @@ def preview(action: str, args: dict) -> str:
             cancel_purchase_order, amend_purchase_order, raise_purchase_request,
             request_quotes, enter_supplier_quote, receive_goods, return_goods,
             enter_supplier_invoice, enter_debit_note, hold_invoice, release_invoice,
-            pay_supplier, or a generic one:
+            pay_supplier, close_purchase_order, or a generic one:
             create_document, update_document, submit_document, workflow_action,
             cancel_document, amend_document.
         args: The exact arguments you will pass to that tool (without confirmation_code).
@@ -546,6 +546,24 @@ def pay_supplier(supplier: str, invoices: list[dict], notes: str | None = None,
     """
     return _write("pay_supplier", {"supplier": supplier, "invoices": invoices,
                                    "notes": notes}, confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def close_purchase_order(po: str, reason: str | None = None,
+                         confirmation_code: str | None = None) -> str:
+    """Close an approved purchase order: nothing more can be received or invoiced against
+    it, and it can't be amended or cancelled. Nothing is deleted. A fully received and
+    invoiced order is closed by its requester or an approver; one that isn't needs a reason
+    and an approver. An order with a draft, pending or rejected receipt or invoice can't be
+    closed.
+
+    Args:
+        po: Purchase order ID.
+        reason: Why (required unless the order is fully received and invoiced). Kept in the
+            audit record.
+        confirmation_code: From preview("close_purchase_order", <these same args>).
+    """
+    return _write("close_purchase_order", {"po": po, "reason": reason}, confirmation_code)
 
 
 # --- generic write tools -------------------------------------------------------------

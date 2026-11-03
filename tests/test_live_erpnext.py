@@ -987,6 +987,95 @@ def test_live_close_order(created):
     assert not req.get_order(po).closed
 
 
+def _reopen(erp, po: str) -> None:
+    """ERPNext's own re-open, so a closed test order can be cancelled with what hangs off it."""
+    erp.call("erpnext.buying.doctype.purchase_order.purchase_order.update_status",
+             status="Submitted", name=po)
+
+
+def test_live_close(created, undo):
+    """Closing through the guarded tool. A complete order (received, invoiced, invoice
+    approved) is closed by its requester but not by AP; while an invoice is still a draft
+    or pending, nobody can close it; afterwards receipts, invoices, amendments and
+    cancellation are refused. An unfinished order is closed only by an approver with a
+    reason, which lands on the order. Orders are re-opened and everything is cancelled
+    afterwards; none of it is a history document."""
+    po = _approved_order(created, [Line("PAPER-A4", D(4), D(42)),
+                                   Line("HVAC-SVC", D(1), D(640))])
+    req, mgr, rcv = svc("REQUESTER"), svc("MANAGER"), svc("RECEIVER")
+    ap, ctl = svc("AP"), svc("CONTROLLER")
+    blocked = lambda p: {c.check for c in p.checks if c.level == "block"}  # noqa: E731
+    close = {"po": po, "reason": None}
+
+    # Nothing received yet: an unfinished order, closed only by an approver with a reason.
+    p = req.preview("close_purchase_order", close)
+    assert p.code is None and blocked(p) == {"close"}
+    p = mgr.preview("close_purchase_order", close)
+    assert p.code is None and "reason" in p.checks[1].message
+
+    out = run(rcv, "receive_goods", {"po": po, "lines": [{"item_code": "PAPER-A4", "qty": 4}]})[1]
+    assert out.outcome == "written", out.message
+    undo.append((rcv.erp, PR, out.target))
+    n = 100000 + uuid.uuid4().int % 900000
+    out = run(ap, "enter_supplier_invoice", {
+        "supplier": "TRANE U.S. INC", "bill_no": f"INV-0{n}",
+        "bill_date": date.today().isoformat(),
+        "lines": [{"po": po, "item_code": "PAPER-A4", "qty": 4, "rate": 42},
+                  {"po": po, "item_code": "HVAC-SVC", "qty": 1, "rate": 640}]})[1]
+    assert out.outcome == "written", out.message
+    inv = out.target
+    undo.append((ctl.erp, PI, inv))
+
+    # A draft invoice (and then one pending approval) blocks everyone.
+    wf = lambda s, action: run(s, "workflow_action", {  # noqa: E731
+        "doctype": PI, "name": inv, "action": action})[1]
+    for stage in (None, SUBMIT_FOR_APPROVAL):
+        if stage:
+            assert wf(ap, stage).outcome == "written"
+        for s, reason in ((req, None), (mgr, "close it anyway")):
+            p = s.preview("close_purchase_order", {"po": po, "reason": reason})
+            assert p.code is None and inv in p.checks[1].message, stage
+
+    assert wf(ctl, APPROVE).outcome == "written"
+    # Complete now: not for AP, who is neither requester nor approver; yes for the requester.
+    assert ap.preview("close_purchase_order", close).code is None
+    p, out = run(req, "close_purchase_order", close)
+    assert p.code and out.outcome == "written", out.message
+    o = req.erp.get_order(po)
+    assert o.closed and o.status == Status.APPROVED
+    assert [a.outcome for a in req.erp.read_audit(po, limit=10)][0] == "written"
+    try:
+        # A closed order takes nothing more and can't be amended, cancelled or closed again.
+        for s, action, args in (
+                (rcv, "receive_goods", {"po": po, "lines": [{"item_code": "PAPER-A4",
+                                                             "qty": 1}]}),
+                (ap, "enter_supplier_invoice", {
+                    "supplier": "TRANE U.S. INC", "bill_no": f"INV-1{n}",
+                    "bill_date": date.today().isoformat(),
+                    "lines": [{"po": po, "item_code": "HVAC-SVC", "qty": 1, "rate": 640}]}),
+                (req, "amend_purchase_order", {"po": po, "lines": [
+                    {"item_code": "PAPER-A4", "qty": 1, "rate": 42}]}),
+                (req, "cancel_purchase_order", {"po": po, "reason": "too late"}),
+                (mgr, "close_purchase_order", {"po": po, "reason": "again"})):
+            p, out = run(s, action, args)
+            assert p.code is None and out.outcome == "refused", action
+    finally:
+        _reopen(req.erp, po)
+
+    # An unfinished order: a requester can't close it, an approver needs a reason.
+    po2 = _approved_order(created, [Line("PAPER-A4", D(1), D(42))])
+    args = {"po": po2, "reason": "supplier withdrew the item"}
+    assert req.preview("close_purchase_order", args).code is None
+    assert mgr.preview("close_purchase_order", {"po": po2}).code is None
+    try:
+        p, out = run(mgr, "close_purchase_order", args)
+        assert p.code and out.outcome == "written", out.message
+        assert mgr.erp.get_order(po2).closed
+        assert mgr.erp.get_doc("Purchase Order", po2)["erp_guard_reason"] == args["reason"]
+    finally:
+        _reopen(mgr.erp, po2)
+
+
 def test_live_change_requests():
     """A change request waits for a second person; rejected, it changes nothing; approved,
     it's saved on the target. The approved change here sets a value the supplier already

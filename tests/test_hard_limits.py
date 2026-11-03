@@ -44,7 +44,7 @@ def test_no_tool_can_pay_bank_or_delete():
     through the pack's checks and the payment workflow); no tool names bank details or
     deletion."""
     tools = [t.name for t in asyncio.run(server.mcp.list_tools())]
-    assert len(tools) == 34
+    assert len(tools) == 35
     assert _forbidden(tools) == ["pay_supplier"]
 
 

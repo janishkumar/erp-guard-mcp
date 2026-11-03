@@ -104,7 +104,8 @@ class P2PPack:
     task_tools: dict[str, tuple[str, ...]] = {
         "Purchase Order": ("create_purchase_order", "submit_for_approval",
                            "approve_purchase_order", "reject_purchase_order",
-                           "cancel_purchase_order", "amend_purchase_order"),
+                           "cancel_purchase_order", "amend_purchase_order",
+                           "close_purchase_order"),
         "Purchase Receipt": ("receive_goods", "return_goods"),
         "Purchase Invoice": ("enter_supplier_invoice", "enter_debit_note", "hold_invoice",
                              "release_invoice"),

@@ -34,6 +34,7 @@ from erp_guard.packs.p2p.models import (
     ReceiptLine,
     Request,
     RequestLine,
+    Rfq,
 )
 from erp_guard.policy import Policy, load_policy
 
@@ -336,6 +337,7 @@ def _order_from_doc(d: dict) -> PurchaseOrder:
         request=requests[0] if requests else None,
         quotations=tuple(dict.fromkeys(i["supplier_quotation"] for i in rows
                                        if i.get("supplier_quotation"))),
+        sole_source_reason=d.get("erp_guard_sole_source_reason") or "",
         closed=d.get("status") == "Closed",
     )
 
@@ -381,7 +383,7 @@ def _quote(d: dict, rows: list[dict]) -> Quote:
     rfqs = [r["request_for_quotation"] for r in rows if r.get("request_for_quotation")]
     return Quote(d["name"], d["supplier"], rfqs[0] if rfqs else None, _doc_state(d, False),
                  tuple(Line(r["item_code"], _dec(r["qty"]), _dec(r["rate"])) for r in rows),
-                 _date(d["transaction_date"]))
+                 _date(d["transaction_date"]), entered_by=d.get("owner") or "")
 
 
 def _receipt(d: dict, rows: list[dict]) -> Receipt:
@@ -665,7 +667,8 @@ class ErpNext:
             "Purchase Order",
             ["name", "supplier", "erp_guard_cost_centre", "owner", "docstatus",
              "workflow_state", "erp_guard_cancelled", "transaction_date",
-             "erp_guard_approver", "erp_guard_notes", "status"],
+             "erp_guard_approver", "erp_guard_notes", "erp_guard_sole_source_reason",
+             "status"],
             filters, order_by="transaction_date desc")
         if not heads:
             return []
@@ -730,12 +733,51 @@ class ErpNext:
                  "schedule_date": schedule.isoformat(), "cost_center": cost_centre}
                 for ln in lines]
 
-    def create_order(self, supplier_id, cost_centre, lines, notes, required_by):
+    def _order_rows(self, lines: list[Line], cost_centre: str, schedule: date,
+                    request: str | None, quotations) -> list[dict]:
+        """The order's rows. A line made from supplier quotations or a purchase request is
+        ERPNext's own row from its mapper (make_purchase_order), so it carries the links
+        back (supplier_quotation and its row, material_request and its row), with the
+        line's quantity and rate and no discount. Each line's item must be on them."""
+        plain = self._items(lines, cost_centre, schedule)
+        if not request and not quotations:
+            return plain
+
+        def mapped(doctype: str, name: str) -> dict[str, dict]:
+            out: dict[str, dict] = {}
+            for r in self.map_doc(doctype, name, "Purchase Order").get("items") or []:
+                out.setdefault(r["item_code"], r)
+            return out
+        quoted: dict[str, dict] = {}
+        for q in quotations:
+            for k, r in mapped("Supplier Quotation", q).items():
+                quoted.setdefault(k, r)
+        requested = mapped("Material Request", request) if request else {}
+        sources = ", ".join([*quotations, *([request] if request else [])])
+        rows = []
+        for ln, row in zip(lines, plain, strict=True):
+            base = (quoted if quotations else requested).get(ln.item_code)
+            if base is None or (request and ln.item_code not in requested):
+                raise ErpError(f"Not on {sources}: {ln.item_code}")
+            r = {**base, **row, "discount_percentage": 0, "discount_amount": 0}
+            if request:
+                mr = requested[ln.item_code]
+                r.update(material_request=mr.get("material_request") or request,
+                         material_request_item=mr.get("material_request_item"))
+            r["stock_qty"] = float(ln.qty) * float(r.get("conversion_factor") or 1)
+            rows.append(r)
+        return rows
+
+    def create_order(self, supplier_id, cost_centre, lines, notes, required_by, *,
+                     request=None, quotations=(), sole_source_reason=""):
         body = {"supplier": supplier_id, "company": self.company, "ignore_pricing_rule": 1,
                 "transaction_date": date.today().isoformat(),
                 "schedule_date": required_by.isoformat(),
                 "erp_guard_cost_centre": cost_centre, "erp_guard_notes": notes,
-                "items": self._items(lines, cost_centre, required_by)}
+                "items": self._order_rows(lines, cost_centre, required_by, request,
+                                          list(quotations))}
+        if sole_source_reason:
+            body["erp_guard_sole_source_reason"] = sole_source_reason
         return _order_from_doc(self.c.request("POST", _res("Purchase Order"), body=body)["data"])
 
     # Order lifecycle on the "Purchase Order Approval" workflow. ERPNext checks each action
@@ -780,18 +822,23 @@ class ErpNext:
             return self.get_order(order_id)
         return self._put(order_id, {"erp_guard_cancelled": 1, "erp_guard_reason": reason})
 
-    def amend_order(self, order_id, lines, notes):
-        """New lines on a draft. A rejected order is revised and a pending one withdrawn
-        back to Draft first, so an amended order always needs resubmitting (an approval
-        previewed before the amendment no longer finds it pending)."""
+    def amend_order(self, order_id, lines, notes, *, request=None, quotations=(),
+                    sole_source_reason=""):
+        """New lines (and links, as create_order) on a draft. A rejected order is revised
+        and a pending one withdrawn back to Draft first, so an amended order always needs
+        resubmitting (an approval previewed before the amendment no longer finds it
+        pending)."""
         current = self._current(order_id)
         back = _BACK_TO_DRAFT.get(current.get("workflow_state"))
         if back:
             self._transition(order_id, back)
         schedule = date.fromisoformat(str(current["schedule_date"])[:10])
-        return self._put(order_id, {
-            "items": self._items(lines, current.get("erp_guard_cost_centre") or "", schedule),
-            "erp_guard_notes": notes})
+        body = {"items": self._order_rows(lines, current.get("erp_guard_cost_centre") or "",
+                                          schedule, request, list(quotations)),
+                "erp_guard_notes": notes}
+        if sole_source_reason or current.get("erp_guard_sole_source_reason"):
+            body["erp_guard_sole_source_reason"] = sole_source_reason
+        return self._put(order_id, body)
 
     def write_audit(self, record):
         body = {"action": record.action, "actor": record.actor, "outcome": record.outcome,
@@ -840,6 +887,19 @@ class ErpNext:
         if since:
             f.append(["transaction_date", ">=", since.isoformat()])
         return self._p2p_list("Material Request", f, "transaction_date asc, name asc")
+
+    def get_rfq(self, id):
+        d = self.get_doc("Request for Quotation", id)
+        if d is None:
+            return None
+        requests = [r["material_request"] for r in d.get("items") or []
+                    if r.get("material_request")]
+        return Rfq(d["name"], requests[0] if requests else None,
+                   tuple(s["supplier"] for s in d.get("suppliers") or []),
+                   _doc_state(d, False), d.get("owner") or "")
+
+    def get_quote(self, id):
+        return self._p2p_get("Supplier Quotation", id)
 
     def list_quotes(self, *, item_codes, since):
         if not item_codes:

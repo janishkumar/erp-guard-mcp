@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from erp_guard.checks import BLOCK, PASS, WARN, CheckResult
-from erp_guard.models import PurchaseOrder, Status, Supplier
+from erp_guard.models import LIVE_STATUSES, PurchaseOrder, Status, Supplier
 from erp_guard.packs.p2p.models import (
     POSTED,
     Allocation,
@@ -19,8 +19,10 @@ from erp_guard.packs.p2p.models import (
     InvoiceLine,
     ItemInfo,
     Payment,
+    Quote,
     Receipt,
     ReceiptLine,
+    Request,
 )
 from erp_guard.policy import Policy
 
@@ -684,3 +686,212 @@ def paying_account(paid_from: str, policy: Policy) -> CheckResult:
         return CheckResult("paying account", BLOCK, f"Paid from '{paid_from}'; payments are "
                            f"made only from the company's account {want}.")
     return CheckResult("paying account", PASS, f"Paid from {want}.")
+
+
+# --- purchase requests and quotes ------------------------------------------------------
+
+def request_required(order: PurchaseOrder, request: Request | None,
+                     policy: Policy) -> CheckResult:
+    """An order of `request_required_from` or more is made from an approved purchase
+    request."""
+    name, need = "request required", policy.request_required_from
+    if order.total < need:
+        return CheckResult(name, PASS, f"Under {usd(need)}: no purchase request needed.")
+    if order.request is None:
+        return CheckResult(name, BLOCK, f"This order is {usd(order.total)}; orders of "
+                           f"{usd(need)} or more are made from an approved purchase request. "
+                           "Raise one with raise_purchase_request, have it approved, and "
+                           "pass it as `request`.", {"total": str(order.total)})
+    if request is None or request.state != DocState.APPROVED:
+        what = "not found" if request is None else request.state.value
+        return CheckResult(name, BLOCK, f"Purchase request {order.request} is {what}; orders "
+                           f"of {usd(need)} or more need an approved one.",
+                           {"request": order.request})
+    return CheckResult(name, PASS, f"Made from approved purchase request {request.id}.")
+
+
+def request_split(order: PurchaseOrder, recent: list[PurchaseOrder], policy: Policy,
+                  today: date) -> CheckResult:
+    """v1's split rule applied to the request threshold: a request-less order under it,
+    with the other live request-less orders to the same supplier and cost centre in the
+    split window, mustn't reach it."""
+    name, need = "request split", policy.request_required_from
+    if order.request is not None:
+        return CheckResult(name, PASS, "Made from a purchase request.")
+    if order.total >= need:
+        return CheckResult(name, PASS, f"{usd(need)} or more: needs a request of its own.")
+    since = today - timedelta(days=policy.split_window_days)
+    others = [o for o in recent
+              if o.id != order.id and o.request is None
+              and o.supplier_id == order.supplier_id and o.cost_centre == order.cost_centre
+              and o.status in LIVE_STATUSES and o.order_date >= since]
+    combined = order.total + sum((o.total for o in others), Decimal(0))
+    evidence = {"related_orders": [o.id for o in others], "combined": str(combined)}
+    if others and combined >= need:
+        return CheckResult(
+            name, BLOCK,
+            f"Possible split to avoid a purchase request. This order ({usd(order.total)}) "
+            f"and {len(others)} other order(s) without a request to the same supplier and "
+            f"cost centre in the last {policy.split_window_days} days "
+            f"({', '.join(o.id for o in others)}) come to {usd(combined)}; {usd(need)} or "
+            "more is bought through an approved purchase request. Raise one request for the "
+            "whole need and order from it.", evidence)
+    return CheckResult(name, PASS, f"Together with {len(others)} related order(s) without a "
+                       f"request, {usd(combined)}: under {usd(need)}.", evidence)
+
+
+def request_quantity(order: PurchaseOrder, request: Request | None,
+                     orders_from_request: list[PurchaseOrder]) -> CheckResult:
+    """An order made from a request: the request is approved and for the order's cost
+    centre, and each item's quantity is at most what it approved less what other live
+    orders from it already order."""
+    name = "request approved"
+    if order.request is None:
+        return CheckResult(name, PASS, "Not made from a purchase request.")
+    if request is None:
+        return CheckResult(name, BLOCK, f"No purchase request '{order.request}'.")
+    if request.state != DocState.APPROVED:
+        return CheckResult(name, BLOCK, f"{request.id} is {request.state.value}; orders are "
+                           "made only from approved purchase requests.")
+    if request.cost_centre != order.cost_centre:
+        return CheckResult(name, BLOCK, f"{request.id} is for cost centre "
+                           f"{request.cost_centre}; this order charges {order.cost_centre}.")
+    approved = _per_item(request.lines)
+    ordered: dict[str, Decimal] = defaultdict(Decimal)
+    others = [o for o in orders_from_request if o.id != order.id
+              and o.request == request.id and o.status in LIVE_STATUSES]
+    for o in others:
+        for ln in o.lines:
+            ordered[ln.item_code] += ln.qty
+    problems = []
+    for item, qty in _per_item(order.lines).items():
+        if item not in approved:
+            problems.append(f"{item} is not on {request.id}")
+            continue
+        left = max(approved[item] - ordered[item], Decimal(0))
+        if qty > left:
+            problems.append(f"{item}: ordering {_qty(qty)}, but only {_qty(left)} of "
+                            f"{_qty(approved[item])} approved isn't ordered yet")
+    evidence = {"request": request.id, "other_orders": [o.id for o in others]}
+    if problems:
+        return CheckResult(name, BLOCK, "; ".join(problems) + ".", evidence)
+    return CheckResult(name, PASS, f"Within what {request.id} approved and isn't ordered yet.",
+                       evidence)
+
+
+def request_authority(actor: str, request: Request, prices: dict[str, Decimal],
+                      policy: Policy) -> CheckResult:
+    """The approver didn't raise the request, and their purchase limit covers its estimated
+    value (each item's last purchase price times quantity). Items with no purchase history
+    are left out of the estimate, and say so: the order made from the request still needs
+    approval at its own total."""
+    name = "request approval tier"
+    if actor == request.requester:
+        return CheckResult(name, BLOCK, f"{actor} raised {request.id} and can't approve it.",
+                           {"requester": request.requester})
+    limit = policy.approver_limit(actor, "purchase_request")
+    if limit is None:
+        return CheckResult(name, BLOCK, f"{actor} can't approve purchase requests.")
+    value = request.estimated_value(prices)
+    if value > limit:
+        need = policy.required_tier(value, "purchase_request")
+        return CheckResult(name, BLOCK, f"{request.id} is estimated at {usd(value)} (last "
+                           f"purchase prices); {actor}'s limit is {usd(limit)}. Needs a "
+                           f"{need.name}.", {"estimate": str(value), "limit": str(limit)})
+    unpriced = sorted({ln.item_code for ln in request.lines if not prices.get(ln.item_code)})
+    if unpriced:
+        return CheckResult(name, WARN, f"Estimated at {usd(value)}, within {actor}'s limit of "
+                           f"{usd(limit)}, but {', '.join(unpriced)} has no purchase history, "
+                           "so isn't in the estimate. The order made from this request is "
+                           "approved at its own total.", {"unpriced": unpriced})
+    return CheckResult(name, PASS, f"Estimated at {usd(value)} (last purchase prices), within "
+                       f"{actor}'s limit of {usd(limit)}.")
+
+
+def competitive_quotes(order: PurchaseOrder, quotes: list[Quote], policy: Policy,
+                       today: date) -> CheckResult:
+    """An order of the quotes threshold or more: at least `count` suppliers, the order's
+    own among them, have submitted quotations in the last `lookback_days` that together
+    cover every item on it. Or the order gives a sole-source reason (approved from the
+    director tier up)."""
+    name, q = "competitive quotes", policy.quotes
+    if order.total < q.threshold:
+        return CheckResult(name, PASS, f"Under {usd(q.threshold)}: no competing quotes needed.")
+    if order.sole_source_reason:
+        return CheckResult(name, PASS, "Sole source: a reason is given instead of competing "
+                           f"quotes, so a {SOLE_SOURCE_TIER} or above approves the order.")
+    since = today - timedelta(days=q.lookback_days)
+    items = {ln.item_code for ln in order.lines}
+    covered: dict[str, set[str]] = defaultdict(set)
+    for qt in quotes:
+        if qt.state == DocState.SUBMITTED and since <= qt.quoted_on <= today:
+            covered[qt.supplier_id] |= {ln.item_code for ln in qt.lines}
+    full = sorted(s for s, quoted in covered.items() if items <= quoted)
+    evidence = {"suppliers": full, "needed": q.count}
+    if len(full) < q.count:
+        found = f"Found {len(full)}" + (f": {', '.join(full)}" if full else "")
+        return CheckResult(name, BLOCK, f"This order is {usd(order.total)}; orders of "
+                           f"{usd(q.threshold)} or more need submitted supplier quotations "
+                           f"for all their items from {q.count} different suppliers in the "
+                           f"last {q.lookback_days} days, or a sole-source reason. {found}.",
+                           evidence)
+    if order.supplier_id not in full:
+        return CheckResult(name, BLOCK, f"{len(full)} suppliers quoted ({', '.join(full)}), "
+                           f"but not {order.supplier_id}, the supplier on this order.",
+                           evidence)
+    return CheckResult(name, PASS, f"{len(full)} suppliers quoted for these items in the last "
+                       f"{q.lookback_days} days: {', '.join(full)}.", evidence)
+
+
+# The purchase tier that approves a sole-source order.
+SOLE_SOURCE_TIER = "director"
+
+
+def sole_source_approver(actor: str, order: PurchaseOrder, policy: Policy) -> CheckResult:
+    name = "sole source"
+    if not order.sole_source_reason:
+        return CheckResult(name, PASS, "Not a sole-source order.")
+    need = next((t.limit for t in policy.approval["purchase_order"]
+                 if t.name == SOLE_SOURCE_TIER), None)
+    if need is None:
+        raise KeyError(f"no '{SOLE_SOURCE_TIER}' tier in [approval.purchase_order]")
+    limit = policy.approver_limit(actor)
+    if limit is None or limit < need:
+        return CheckResult(name, BLOCK, f"{order.id} is a sole-source order (no competing "
+                           f"quotes); it is approved by a {SOLE_SOURCE_TIER} or above.")
+    return CheckResult(name, PASS, f"Sole-source order, approved by a {SOLE_SOURCE_TIER} or "
+                       "above.")
+
+
+def quote_price(order: PurchaseOrder, quotes_by_id: dict[str, Quote | None]) -> CheckResult:
+    """An order made from supplier quotations: each is a submitted quotation of the order's
+    supplier, every item is on one, and no rate is above the lowest quoted for it."""
+    name = "quote price"
+    if not order.quotations:
+        return CheckResult(name, PASS, "Not made from a supplier quotation.")
+    problems = []
+    rates: dict[str, list[Decimal]] = defaultdict(list)
+    for qid in order.quotations:
+        qt = quotes_by_id.get(qid)
+        if qt is None:
+            problems.append(f"No supplier quotation '{qid}'")
+        elif qt.state != DocState.SUBMITTED:
+            problems.append(f"{qid} is {qt.state.value}, not submitted")
+        elif qt.supplier_id != order.supplier_id:
+            problems.append(f"{qid} is {qt.supplier_id}'s quotation, not "
+                            f"{order.supplier_id}'s")
+        else:
+            for ln in qt.lines:
+                rates[ln.item_code].append(ln.rate)
+    if not problems:
+        for ln in order.lines:
+            quoted = rates.get(ln.item_code)
+            if not quoted:
+                problems.append(f"{ln.item_code} isn't on {', '.join(order.quotations)}")
+            elif ln.rate > min(quoted):
+                problems.append(f"{ln.item_code} at {usd(ln.rate)} is above the quoted "
+                                f"{usd(min(quoted))}")
+    if problems:
+        return CheckResult(name, BLOCK, "; ".join(problems) + ".",
+                           {"quotations": list(order.quotations)})
+    return CheckResult(name, PASS, "Every rate is at or below the quoted rate.")

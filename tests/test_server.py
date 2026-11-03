@@ -19,7 +19,8 @@ READS = {"preview", "search_suppliers", "get_purchase_order", "list_purchase_ord
          "describe_doctype", "find_documents", "get_document", "draft_from"}
 WRITES = {"create_purchase_order", "onboard_supplier", "submit_for_approval",
           "approve_purchase_order", "reject_purchase_order", "cancel_purchase_order",
-          "amend_purchase_order", "receive_goods", "return_goods",
+          "amend_purchase_order", "raise_purchase_request", "request_quotes",
+          "enter_supplier_quote", "receive_goods", "return_goods",
           "enter_supplier_invoice", "enter_debit_note", "hold_invoice", "release_invoice",
           "pay_supplier", "create_document", "update_document", "submit_document",
           "workflow_action", "cancel_document", "amend_document"}

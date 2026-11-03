@@ -21,6 +21,7 @@ from erp_guard.packs.p2p.models import (
     Quote,
     Receipt,
     Request,
+    Rfq,
 )
 
 # Document types with an approval workflow, and those submitted directly; each by the
@@ -130,9 +131,28 @@ class MemoryErp:
         self.suppliers[s.id] = s
         return s
 
-    def create_order(self, supplier_id, cost_centre, lines, notes, required_by):
+    def _links(self, lines, request, quotations) -> dict:
+        """As ERPNext: each line made from a request or quotation must be on it."""
+        items = {ln.item_code for ln in lines}
+        if request is not None:
+            missing = items - {ln.item_code for ln in self._get("Material Request",
+                                                                  request).lines}
+            if missing:
+                raise ErpError(f"Not on {request}: " + "; ".join(sorted(missing)))
+        if quotations:
+            quoted = {ln.item_code for q in quotations
+                      for ln in self._get("Supplier Quotation", q).lines}
+            if items - quoted:
+                raise ErpError(f"Not on {', '.join(quotations)}: "
+                               + "; ".join(sorted(items - quoted)))
+        return {"request": request, "quotations": tuple(quotations)}
+
+    def create_order(self, supplier_id, cost_centre, lines, notes, required_by, *,
+                     request=None, quotations=(), sole_source_reason=""):
         o = PurchaseOrder(self._next("PO"), supplier_id, cost_centre, self.user, Status.DRAFT,
-                          self.today, tuple(lines), notes)
+                          self.today, tuple(lines), notes,
+                          sole_source_reason=sole_source_reason,
+                          **self._links(lines, request, quotations))
         self.orders[o.id] = o
         return o
 
@@ -152,8 +172,11 @@ class MemoryErp:
     def cancel_order(self, order_id, reason):
         return self._replace(order_id, status=Status.CANCELLED)
 
-    def amend_order(self, order_id, lines, notes):
-        return self._replace(order_id, lines=tuple(lines), notes=notes, status=Status.DRAFT)
+    def amend_order(self, order_id, lines, notes, *, request=None, quotations=(),
+                    sole_source_reason=""):
+        return self._replace(order_id, lines=tuple(lines), notes=notes, status=Status.DRAFT,
+                             sole_source_reason=sole_source_reason,
+                             **self._links(lines, request, quotations))
 
     def write_audit(self, record):
         rid = self._next("AUD")
@@ -171,6 +194,14 @@ class MemoryErp:
 
     def list_requests(self, *, since=None):
         return [r for r in self.requests.values() if since is None or r.created >= since]
+
+    def get_rfq(self, id):
+        r = self.rfqs.get(id)
+        return Rfq(r["id"], r["request"], tuple(r["suppliers"]), r["state"],
+                   r["owner"]) if r else None
+
+    def get_quote(self, id):
+        return self.quotes.get(id)
 
     def list_quotes(self, *, item_codes, since):
         codes = set(item_codes)
@@ -256,20 +287,25 @@ class MemoryErp:
         return r
 
     def create_rfq(self, request_id, suppliers):
-        self._get("Material Request", request_id)
+        """As ERPNext's mapper: only from an approved (submitted) request."""
+        if self._state("Material Request", request_id) not in POSTED:
+            raise ErpError(f"Material Request {request_id} isn't submitted")
         rid = self._next("RFQ")
         self.rfqs[rid] = {"id": rid, "request": request_id, "suppliers": list(suppliers),
-                          "state": DocState.DRAFT}
+                          "state": DocState.DRAFT, "owner": self.user}
         return rid
 
     def create_quote(self, supplier_id, lines, rfq, quoted_on):
         if rfq is not None:
+            if self._state("Request for Quotation", rfq) not in POSTED:
+                raise ErpError(f"Request for Quotation {rfq} isn't submitted")
             req = self._get("Material Request", self._get("Request for Quotation", rfq)["request"])
             asked = {ln.item_code for ln in req.lines}
             missing = [ln.item_code for ln in lines if ln.item_code not in asked]
             if missing:
                 raise ErpError(f"Not on {rfq}: " + "; ".join(missing))
-        q = Quote(self._next("SQ"), supplier_id, rfq, DocState.DRAFT, tuple(lines), quoted_on)
+        q = Quote(self._next("SQ"), supplier_id, rfq, DocState.DRAFT, tuple(lines), quoted_on,
+                  entered_by=self.user)
         self.quotes[q.id] = q
         return q
 

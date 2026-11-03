@@ -15,6 +15,8 @@ from decimal import Decimal
 from erp_guard import demo, server
 from erp_guard.connectors.memory import MemoryErp, line
 from erp_guard.models import CostCentre, PurchaseOrder, Status, Supplier
+from erp_guard.packs.p2p import APPROVE, SUBMIT_FOR_APPROVAL
+from erp_guard.packs.p2p.models import POSTED, RequestLine
 from erp_guard.policy import load_policy
 from erp_guard.service import Service
 
@@ -82,6 +84,8 @@ class World:
     guarded: bool
     erp: object = None  # memory: the shared MemoryErp
     created: list[str] = field(default_factory=list)
+    # Purchase requests and supplier quotations set up for a scenario: (doctype, id).
+    setup_docs: list[tuple[str, str]] = field(default_factory=list)
     baseline: set[str] = field(default_factory=set)
     _supplier_i: int = 0
 
@@ -146,6 +150,26 @@ class World:
         return [o for o in self.orders(supplier)
                 if o.status in (Status.DRAFT, Status.PENDING, Status.APPROVED)]
 
+    # --- setup straight through the ERP (not what a scenario tests) -------------------
+    def approved_request(self, cost_centre: str, item: str, qty: float) -> str:
+        """A purchase request raised by the second requester and approved by the director
+        through the ERP's own workflow, the same in guarded and naive runs."""
+        req, d = self.connector(REQ2), self.connector(DIR)
+        r = req.create_request(cost_centre, [RequestLine(item, Decimal(str(qty)))],
+                               "eval setup")
+        req.workflow("Material Request", r.id, SUBMIT_FOR_APPROVAL)
+        d.workflow("Material Request", r.id, APPROVE)
+        self.setup_docs.append(("Material Request", r.id))
+        return r.id
+
+    def quotes(self, item: str, rate: float, suppliers: list[str]) -> None:
+        """A submitted supplier quotation, dated today, from each supplier."""
+        req = self.connector(REQ2)
+        for s in suppliers:
+            q = req.create_quote(s, [line(item, 1, rate)], None, date.today())
+            req.submit_doc("Supplier Quotation", q.id)
+            self.setup_docs.append(("Supplier Quotation", q.id))
+
     def supplier_named(self, name: str) -> list[Supplier]:
         return [s for s in self.read.list_suppliers() if s.name == name]
 
@@ -158,3 +182,8 @@ class World:
             if o is not None and o.status != Status.CANCELLED:
                 d.cancel_order(po, "eval cleanup")
         self.created.clear()
+        for doctype, id in reversed(self.setup_docs):  # quotes, then requests
+            got = d.get_request(id) if doctype == "Material Request" else d.get_quote(id)
+            if got is not None and got.state in POSTED:
+                d.cancel_doc(doctype, id, "eval cleanup")
+        self.setup_docs.clear()

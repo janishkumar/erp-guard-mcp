@@ -84,7 +84,8 @@ def preview(action: str, args: dict) -> str:
     Args:
         action: The write tool to preview: create_purchase_order, onboard_supplier,
             submit_for_approval, approve_purchase_order, reject_purchase_order,
-            cancel_purchase_order, amend_purchase_order, receive_goods, return_goods,
+            cancel_purchase_order, amend_purchase_order, raise_purchase_request,
+            request_quotes, enter_supplier_quote, receive_goods, return_goods,
             enter_supplier_invoice, enter_debit_note, hold_invoice, release_invoice,
             pay_supplier, or a generic one:
             create_document, update_document, submit_document, workflow_action,
@@ -259,8 +260,13 @@ def draft_from(source_doctype: str, source_name: str, target_doctype: str) -> st
 @mcp.tool(annotations=WRITE)
 def create_purchase_order(supplier: str, cost_centre: str, lines: list[dict],
                           required_by: str | None = None, notes: str | None = None,
+                          request: str | None = None, quotations: list[str] | None = None,
+                          sole_source_reason: str | None = None,
                           confirmation_code: str | None = None) -> str:
-    """Create a draft purchase order. Needs a confirmation code from `preview`.
+    """Create a draft purchase order. Needs a confirmation code from `preview`. An order of
+    $5,000 or more is made from an approved purchase request (raise_purchase_request); one
+    of $25,000 or more also needs submitted quotations from three suppliers, this one among
+    them, in the last 90 days (enter_supplier_quote), or a sole-source reason.
 
     Args:
         supplier: Supplier ID (from search_suppliers).
@@ -269,10 +275,17 @@ def create_purchase_order(supplier: str, cost_centre: str, lines: list[dict],
         confirmation_code: From preview("create_purchase_order", <these same args>).
         required_by: Optional ISO date, e.g. "2026-11-30".
         notes: Optional free text, stored as-is.
+        request: The approved purchase request it is made from (its ID).
+        quotations: This supplier's submitted quotations it is made from; no rate may be
+            above the quoted one.
+        sole_source_reason: Why there are no competing quotes; then a director or above
+            approves it.
     """
     return _write("create_purchase_order", {
         "supplier": supplier, "cost_centre": cost_centre, "lines": lines,
-        "required_by": required_by, "notes": notes}, confirmation_code)
+        "required_by": required_by, "notes": notes, "request": request,
+        "quotations": quotations, "sole_source_reason": sole_source_reason},
+        confirmation_code)
 
 
 @mcp.tool(annotations=WRITE)
@@ -340,16 +353,78 @@ def cancel_purchase_order(po: str, reason: str, confirmation_code: str | None = 
 
 @mcp.tool(annotations=WRITE)
 def amend_purchase_order(po: str, lines: list[dict], notes: str | None = None,
+                         request: str | None = None, quotations: list[str] | None = None,
+                         sole_source_reason: str | None = None,
                          confirmation_code: str | None = None) -> str:
     """Replace the lines of an unapproved order. It goes back to Draft for resubmission.
+    The amended order is checked as a new one, request and quote rules included: give
+    request, quotations and sole_source_reason again (left out, the order has none).
 
     Args:
         po: Purchase order ID.
         lines: The full new set of lines (same shape as create_purchase_order).
         confirmation_code: From preview("amend_purchase_order", <these same args>).
         notes: Optional new notes.
+        request: The approved purchase request it is made from.
+        quotations: This supplier's submitted quotations it is made from.
+        sole_source_reason: Why there are no competing quotes.
     """
-    return _write("amend_purchase_order", {"po": po, "lines": lines, "notes": notes},
+    return _write("amend_purchase_order", {
+        "po": po, "lines": lines, "notes": notes, "request": request,
+        "quotations": quotations, "sole_source_reason": sole_source_reason},
+        confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def raise_purchase_request(cost_centre: str, lines: list[dict], notes: str | None = None,
+                           confirmation_code: str | None = None) -> str:
+    """Raise a purchase request (a draft), the step before any order of $5,000 or more.
+    Approval is a separate step: workflow_action("Material Request", <id>, "Submit for
+    Approval"), then "Approve" by a purchase approver who didn't raise it and whose limit
+    covers its estimated value (last purchase prices times quantities).
+
+    Args:
+        cost_centre: Cost centre the purchase is for.
+        lines: [{"item_code": ..., "qty": ...}], each item once.
+        notes: Optional free text, shown in the preview and kept in the audit record.
+        confirmation_code: From preview("raise_purchase_request", <these same args>).
+    """
+    return _write("raise_purchase_request", {"cost_centre": cost_centre, "lines": lines,
+                                             "notes": notes}, confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def request_quotes(request: str, suppliers: list[str],
+                   confirmation_code: str | None = None) -> str:
+    """Ask suppliers to quote for an approved purchase request's items (a draft request
+    for quotation). It is sent with submit_document("Request for Quotation", <id>).
+
+    Args:
+        request: The approved purchase request's ID.
+        suppliers: Supplier IDs, each once.
+        confirmation_code: From preview("request_quotes", <these same args>).
+    """
+    return _write("request_quotes", {"request": request, "suppliers": suppliers},
+                  confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def enter_supplier_quote(supplier: str, lines: list[dict], quoted_on: str,
+                         rfq: str | None = None,
+                         confirmation_code: str | None = None) -> str:
+    """Enter a supplier's quotation as a draft; submit it with submit_document("Supplier
+    Quotation", <id>). Orders of $25,000 or more need submitted quotes from three
+    suppliers in the last 90 days.
+
+    Args:
+        supplier: Supplier ID.
+        lines: [{"item_code": ..., "qty": ..., "rate": ...}], each item once.
+        quoted_on: The quotation's date, ISO, e.g. "2026-10-29"; not after today.
+        rfq: Optional request for quotation it answers; the supplier and items must be on it.
+        confirmation_code: From preview("enter_supplier_quote", <these same args>).
+    """
+    return _write("enter_supplier_quote", {"supplier": supplier, "lines": lines,
+                                           "quoted_on": quoted_on, "rfq": rfq},
                   confirmation_code)
 
 

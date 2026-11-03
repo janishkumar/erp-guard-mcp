@@ -1,4 +1,10 @@
-"""Suppliers and purchase orders: create, onboard, submit, approve, reject, cancel, amend."""
+"""Suppliers and purchase orders: create, onboard, submit, approve, reject, cancel, amend.
+
+An order of $5,000 or more is made from an approved purchase request, and one of $25,000
+or more needs competing supplier quotations or a sole-source reason (packs.p2p.requests
+raises the requests and enters the quotes). Those checks run on create, submit and amend;
+a sole-source order is approved from the director tier up.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,8 @@ from typing import TYPE_CHECKING
 
 from erp_guard import checks as C
 from erp_guard.models import LIVE_STATUSES, Line, PurchaseOrder, Snapshot, Status
-from erp_guard.service import Action, _lines, _text, canonicaliser
+from erp_guard.packs.p2p import checks as P
+from erp_guard.service import Action, InvalidArgs, _lines, _text, canonicaliser
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -22,14 +29,46 @@ def _po(a: dict) -> str:
     return _text(a, "po", required=True, max_len=140)
 
 
+def _quotations(a: dict) -> list[str]:
+    """Supplier quotation IDs, each once, in a canonical order."""
+    raw = a.get("quotations")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise InvalidArgs("'quotations' must be a list of supplier quotation IDs")
+    out: set[str] = set()
+    for i, v in enumerate(raw):
+        if not isinstance(v, str) or not v.strip() or len(v.strip()) > 140:
+            raise InvalidArgs(f"quotation {i + 1} must be a supplier quotation ID")
+        out.add(v.strip())
+    return sorted(out)
+
+
+# What an order is made from; on create and amend alike (an amendment gives them again).
+_LINK_SPEC = {
+    "request": lambda a: _text(a, "request", max_len=140),
+    "quotations": _quotations,
+    "sole_source_reason": lambda a: _text(a, "sole_source_reason"),
+}
+
+
 def _proposed(svc: Service, canon: dict, base: PurchaseOrder | None = None) -> PurchaseOrder:
     lines = tuple(Line(ln["item_code"], Decimal(ln["qty"]), Decimal(ln["rate"]),
                        ln["description"]) for ln in canon["lines"])
+    links = {"request": canon.get("request") or None,
+             "quotations": tuple(canon.get("quotations") or ()),
+             "sole_source_reason": canon.get("sole_source_reason", "")}
     if base is not None:
         return PurchaseOrder(base.id, base.supplier_id, base.cost_centre, base.requester,
-                             base.status, base.order_date, lines, canon.get("notes", ""))
+                             base.status, base.order_date, lines, canon.get("notes", ""),
+                             **links)
     return PurchaseOrder("(new)", canon["supplier"], canon["cost_centre"], svc.actor,
-                         Status.DRAFT, svc.today(), lines, canon.get("notes", ""))
+                         Status.DRAFT, svc.today(), lines, canon.get("notes", ""), **links)
+
+
+def _links(order: PurchaseOrder) -> dict:
+    return {"request": order.request, "quotations": list(order.quotations),
+            "sole_source_reason": order.sole_source_reason}
 
 
 def _duplicate_lines(order: PurchaseOrder) -> C.CheckResult:
@@ -45,9 +84,39 @@ def _duplicate_lines(order: PurchaseOrder) -> C.CheckResult:
     return C.CheckResult("duplicate_line", C.PASS, "Each item is on one line.")
 
 
-def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool) -> list[C.CheckResult]:
-    """Split, budget and (for new lines) items, one line per item and price, against fresh
-    ERP data."""
+def _request_checks(svc: Service, order: PurchaseOrder,
+                    recent: list[PurchaseOrder]) -> list[C.CheckResult]:
+    """The purchase request and quote rules, against fresh ERP data. A connector that
+    doesn't model requests (SAP, for now) can't show an order of the request threshold or
+    more was requested, so those are refused there."""
+    erp, policy, today = svc.erp, svc.policy, svc.today()
+    if not hasattr(erp, "get_request"):
+        if order.request or order.quotations or order.sole_source_reason or \
+                order.total >= policy.request_required_from:
+            return [C.CheckResult(
+                "connector", C.BLOCK, f"{erp.name} doesn't support purchase requests and "
+                "quotes yet, so it takes only orders under "
+                f"{P.usd(policy.request_required_from)} made from neither.")]
+        return [P.request_split(order, recent, policy, today)]
+    request = erp.get_request(order.request) if order.request else None
+    from_request = [o for o in erp.list_orders(since=request.created)
+                    if o.request == request.id] if request else []
+    quotes = []
+    if order.total >= policy.quotes.threshold and not order.sole_source_reason:
+        quotes = erp.list_quotes(item_codes=sorted({ln.item_code for ln in order.lines}),
+                                 since=today - timedelta(days=policy.quotes.lookback_days))
+    linked = {q: erp.get_quote(q) for q in order.quotations}
+    return [P.request_required(order, request, policy),
+            P.request_split(order, recent, policy, today),
+            P.request_quantity(order, request, from_request),
+            P.competitive_quotes(order, quotes, policy, today),
+            P.quote_price(order, linked)]
+
+
+def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool,
+                  with_requests: bool = True) -> list[C.CheckResult]:
+    """Split, budget, the request and quote rules (unless left out, as at approval) and
+    (for new lines) items, one line per item and price, against fresh ERP data."""
     erp, policy, today = svc.erp, svc.policy, svc.today()
     since = min(today - timedelta(days=policy.split_window_days), svc.fy_start())
     cc_orders = erp.list_orders(cost_centre=order.cost_centre, since=since)
@@ -60,6 +129,8 @@ def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool) -> list
         Decimal(0),
     )
     out = [C.split_purchase(order, cc_orders, policy, today), C.budget(order, snap)]
+    if with_requests:
+        out += _request_checks(svc, order, cc_orders)
     if with_prices:
         out[:0] = [C.items_known(order, erp.item_codes()), _duplicate_lines(order)]
         prices = erp.last_purchase_prices(sorted({ln.item_code for ln in order.lines}))
@@ -68,7 +139,8 @@ def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool) -> list
 
 
 def _texts(canon: dict) -> dict[str, str]:
-    texts = {k: canon[k] for k in ("notes", "name", "reason", "comment") if canon.get(k)}
+    texts = {k: canon[k] for k in ("notes", "name", "reason", "comment",
+                                   "sole_source_reason") if canon.get(k)}
     for i, ln in enumerate(canon.get("lines", [])):
         if ln["description"]:
             texts[f"line {i + 1} description"] = ln["description"]
@@ -77,6 +149,17 @@ def _texts(canon: dict) -> dict[str, str]:
 
 def _describe_lines(order: PurchaseOrder) -> str:
     return ", ".join(f"{ln.qty} x {ln.item_code} @ ${ln.rate:,.2f}" for ln in order.lines)
+
+
+def _describe_links(order: PurchaseOrder) -> str:
+    out = []
+    if order.request:
+        out.append(f" From purchase request {order.request}.")
+    if order.quotations:
+        out.append(f" From supplier quotation(s) {', '.join(order.quotations)}.")
+    if order.sole_source_reason:
+        out.append(" Sole source (no competing quotes): approved by a director or above.")
+    return "".join(out)
 
 
 # --- onboard_supplier ----------------------------------------------------------------
@@ -109,7 +192,7 @@ def _eval_create(svc: Service, canon: dict) -> Result:
     return (f"Create draft PO to {name} ({order.supplier_id}) on cost centre "
             f"{order.cost_centre}: {_describe_lines(order)}; total "
             f"${order.total:,.2f}, needs {svc.policy.required_tier(order.total).name} "
-            f"approval. Requester: {actor}."), res
+            f"approval. Requester: {actor}.{_describe_links(order)}"), res
 
 
 def _write_create(svc: Service, canon: dict) -> tuple[str, str]:
@@ -117,7 +200,7 @@ def _write_create(svc: Service, canon: dict) -> tuple[str, str]:
     req = date.fromisoformat(canon["required_by"]) if canon["required_by"] \
         else svc.today() + timedelta(days=14)
     po = svc.erp.create_order(order.supplier_id, order.cost_centre, list(order.lines),
-                              canon["notes"], req)
+                              canon["notes"], req, **_links(order))
     return po.id, f"Draft purchase order {po.id} created (${po.total:,.2f})."
 
 
@@ -149,9 +232,10 @@ def _eval_decision(svc: Service, canon: dict, verb: str) -> Result:
         res.append(C.segregation_of_duties(actor, order))
         if verb == "approve":
             res.append(C.approval_authority(actor, order, svc.policy))
+            res.append(P.sole_source_approver(actor, order, svc.policy))
             res.append(C.self_dealing(actor, svc.erp.get_supplier(order.supplier_id),
                                       "approver"))
-            res += _order_checks(svc, order, with_prices=False)
+            res += _order_checks(svc, order, with_prices=False, with_requests=False)
     res += C.free_text(_texts(canon))
     total = f" (${order.total:,.2f})" if order else ""
     return f"{verb.capitalize()} {ref}{total} as {actor}.", res
@@ -212,14 +296,15 @@ def _eval_amend(svc: Service, canon: dict) -> Result:
         res += _order_checks(svc, new, with_prices=True)
         res += C.free_text(_texts(canon))
         return (f"Amend {ref}: {_describe_lines(new)}; total ${new.total:,.2f} (was "
-                f"${order.total:,.2f}). Goes back to Draft and needs resubmitting."), res
+                f"${order.total:,.2f}). Goes back to Draft and needs resubmitting."
+                f"{_describe_links(new)}"), res
     return f"Amend {ref}.", res
 
 
 def _write_amend(svc: Service, canon: dict) -> tuple[str, str]:
     po_id = canon["po"]
     order = _proposed(svc, canon, base=svc.erp.get_order(po_id))
-    svc.erp.amend_order(po_id, list(order.lines), canon["notes"])
+    svc.erp.amend_order(po_id, list(order.lines), canon["notes"], **_links(order))
     return po_id, f"{po_id} amended and back in Draft."
 
 
@@ -236,6 +321,7 @@ ACTIONS: list[Action] = [
         "lines": _lines,
         "required_by": lambda a: _text(a, "required_by", max_len=10),
         "notes": lambda a: _text(a, "notes"),
+        **_LINK_SPEC,
     }, _eval_create, _write_create),
     _action("onboard_supplier", {
         "name": lambda a: _text(a, "name", required=True, max_len=140),
@@ -259,5 +345,6 @@ ACTIONS: list[Action] = [
         "po": _po,
         "lines": _lines,
         "notes": lambda a: _text(a, "notes"),
+        **_LINK_SPEC,
     }, _eval_amend, _write_amend, "po"),
 ]

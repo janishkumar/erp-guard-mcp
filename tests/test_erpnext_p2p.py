@@ -518,9 +518,19 @@ def test_memory_refuses_what_erpnext_refuses(erp):
     with pytest.raises(ErpError, match=r"bank details are never written: \['paid_from'\]"):
         erp.create_payment("SUP-CANON", [Allocation(inv.id, D(1))], "Petty Cash - LDU")
     req = erp.create_request("IT", [RequestLine("LAPTOP-14", D(1))], "")
+    with pytest.raises(ErpError, match="isn't submitted"):  # mappers take submitted sources
+        erp.create_rfq(req.id, ["SUP-CANON"])
+    erp.workflow("Material Request", req.id, "Submit for Approval")
+    erp.as_user(MGR).workflow("Material Request", req.id, APPROVE)
     rfq = erp.create_rfq(req.id, ["SUP-CANON"])
+    with pytest.raises(ErpError, match="isn't submitted"):
+        erp.create_quote("SUP-CANON", [Line("LAPTOP-14", D(1), D(80))], rfq, TODAY)
+    erp.submit_doc("Request for Quotation", rfq)
     with pytest.raises(ErpError, match=f"Not on {rfq}: TONER-K"):
         erp.create_quote("SUP-CANON", [Line("TONER-K", D(1), D(80))], rfq, TODAY)
+    with pytest.raises(ErpError, match=f"Not on {req.id}: TONER-K"):
+        erp.create_order("SUP-CANON", "IT", [Line("TONER-K", D(1), D(80))], "", TODAY,
+                         request=req.id)
     with pytest.raises(ErpError, match="bank details are never written"):
         erp.create_change_request("Supplier", "SUP-HERC", {"default_bank_account": "x"})
 

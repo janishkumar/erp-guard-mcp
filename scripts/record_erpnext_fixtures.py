@@ -24,7 +24,8 @@ import httpx
 URL = os.environ.get("ERPNEXT_URL", "http://localhost:8080")
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "erpnext"
 META_TYPES = ["Task", "Project", "Customer", "Item", "Purchase Invoice", "Purchase Receipt",
-              "Payment Entry", "Supplier", "Purchase Order", "Journal Entry", "Server Script"]
+              "Payment Entry", "Supplier", "Purchase Order", "Journal Entry", "Server Script",
+              "Material Request", "Request for Quotation", "Supplier Quotation"]
 DOCTYPE_FIELDS = ["name", "module", "issingle", "istable", "is_submittable"]
 
 

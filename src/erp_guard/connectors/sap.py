@@ -233,7 +233,15 @@ class SapS4:
                                               "CostCenter": cost_centre,
                                               "GLAccount": self.gl_account}]}
 
-    def create_order(self, supplier_id, cost_centre, lines, notes, required_by):
+    @staticmethod
+    def _no_links(request, quotations, sole_source_reason) -> None:
+        if request or quotations or sole_source_reason:
+            raise ErpError("The SAP connector doesn't support purchase requests, quotations "
+                           "or sole-source reasons yet.")
+
+    def create_order(self, supplier_id, cost_centre, lines, notes, required_by, *,
+                     request=None, quotations=(), sole_source_reason=""):
+        self._no_links(request, quotations, sole_source_reason)
         body = {"PurchaseOrderType": "NB", **self.org, "Supplier": supplier_id,
                 "DocumentCurrency": self.currency,
                 "PurchaseOrderDate": date.today().isoformat(),
@@ -273,7 +281,9 @@ class SapS4:
                 self._patch_item(order_id, item, {"PurchasingDocumentDeletionCode": "L"})
         return self.get_order(order_id)
 
-    def amend_order(self, order_id, lines, notes):
+    def amend_order(self, order_id, lines, notes, *, request=None, quotations=(),
+                    sole_source_reason=""):
+        self._no_links(request, quotations, sole_source_reason)
         items = [i for i in self._raw_items(order_id)
                  if not i.get("PurchasingDocumentDeletionCode")]
         if len(items) != len(lines):

@@ -11,8 +11,11 @@ its own checks (packs.p2p.receipts); receipts are otherwise written by `receive_
 invoice checks (packs.p2p.invoices); invoices and debit notes are entered by
 `enter_supplier_invoice` and `enter_debit_note`. A Payment Entry's workflow actions, draft
 edits and cancellation run the payment checks (packs.p2p.payments); payments are entered by
-`pay_supplier`. Every other operation on a P2P-owned type is refused until its task tools
-land.
+`pay_supplier`. A Material Request's workflow actions run the purchase request checks, and
+submitting a Request for Quotation or a Supplier Quotation runs the quote checks
+(packs.p2p.requests); they are raised by `raise_purchase_request`, `request_quotes` and
+`enter_supplier_quote`. Every other operation on a P2P-owned type is refused until its task
+tools land.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from erp_guard.packs.p2p import (
     invoices,
     payments,
     receipts,
+    requests,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +63,10 @@ _DIRECT = {
     ("Payment Entry", Op.WORKFLOW): (payments.evaluate_workflow, payments.apply_workflow),
     ("Payment Entry", Op.UPDATE): (payments.evaluate_update, payments.apply_update),
     ("Payment Entry", Op.CANCEL): (payments.evaluate_cancel, payments.apply_cancel),
+    ("Material Request", Op.WORKFLOW): (requests.evaluate_workflow, requests.apply_workflow),
+    ("Request for Quotation", Op.SUBMIT): (requests.evaluate_submit_rfq,
+                                           requests.apply_submit),
+    ("Supplier Quotation", Op.SUBMIT): (requests.evaluate_submit_quote, requests.apply_submit),
 }
 # Unsupported operations whose step has a tool: the refusal names it.
 _INSTEAD = {
@@ -71,6 +79,11 @@ _INSTEAD = {
     ("Payment Entry", Op.SUBMIT): "a payment is submitted by approving it with "
                                   "workflow_action",
     ("Payment Entry", Op.AMEND): "enter a new payment with pay_supplier",
+    ("Material Request", Op.CREATE): "raise purchase requests with raise_purchase_request",
+    ("Material Request", Op.SUBMIT): "a request is submitted by approving it with "
+                                     "workflow_action",
+    ("Request for Quotation", Op.CREATE): "ask for quotes with request_quotes",
+    ("Supplier Quotation", Op.CREATE): "enter quotes with enter_supplier_quote",
 }
 
 
@@ -90,6 +103,9 @@ class P2PPack:
         "Purchase Invoice": ("enter_supplier_invoice", "enter_debit_note", "hold_invoice",
                              "release_invoice"),
         "Payment Entry": ("pay_supplier",),
+        "Material Request": ("raise_purchase_request",),
+        "Request for Quotation": ("request_quotes",),
+        "Supplier Quotation": ("enter_supplier_quote",),
         "Supplier": ("onboard_supplier",),
     }
 

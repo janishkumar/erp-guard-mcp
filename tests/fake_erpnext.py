@@ -50,7 +50,8 @@ class FakeErpNext:
         self.workflows: set[str] = set()        # doctypes with an active workflow
         self.transitions: dict[tuple[str, str], list[str]] = {}
         self.meta_overrides: dict[str, dict] = {}
-        # Mapper method (its last dotted part) -> the unsaved draft it returns.
+        # Mapper method (its full path, or its last dotted part) -> the unsaved draft it
+        # returns.
         self.mapped: dict[str, dict] = {}
         self._n = 0
 
@@ -173,8 +174,9 @@ class FakeErpNext:
                     "Purchase Order", "Purchase Invoice", "Payment Entry"):
                 d["erp_guard_approver"] = self.user  # the seeded workflows' update field
             return ok(d)
-        if method.rsplit(".", 1)[-1] in self.mapped:
-            return ok(copy.deepcopy(self.mapped[method.rsplit(".", 1)[-1]]))
+        for key in (method, method.rsplit(".", 1)[-1]):  # the full path wins
+            if key in self.mapped:
+                return ok(copy.deepcopy(self.mapped[key]))
         if method == "frappe.handler.run_doc_method":
             d = self.docs[(body["dt"], body["dn"])]
             if body["method"] == "block_invoice":

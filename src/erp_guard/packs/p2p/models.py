@@ -98,6 +98,18 @@ class Request:
 
 
 @dataclass(frozen=True)
+class Rfq:
+    """A request for quotation: the suppliers asked to quote for a purchase request's
+    items. It has no approval; it is submitted directly."""
+
+    id: str
+    request: str | None
+    suppliers: tuple[str, ...]
+    state: DocState
+    created_by: str
+
+
+@dataclass(frozen=True)
 class Quote:
     """A supplier quotation, optionally in answer to a request for quotation."""
 
@@ -107,6 +119,7 @@ class Quote:
     state: DocState
     lines: tuple[Line, ...]
     quoted_on: date
+    entered_by: str = ""
 
 
 @dataclass(frozen=True)

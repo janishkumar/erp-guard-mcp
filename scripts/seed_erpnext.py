@@ -88,6 +88,10 @@ PO_FIELDS = [
     # offered on it any more).
     {"fieldname": "erp_guard_cancelled", "fieldtype": "Check", "label": "Cancelled (draft)",
      "default": "0", "read_only": 1, "in_list_view": 1, "insert_after": "erp_guard_notes"},
+    # Why an order of $25,000 or more has no competing quotes; a director or above approves
+    # it then.
+    {"fieldname": "erp_guard_sole_source_reason", "fieldtype": "Small Text",
+     "label": "Sole-source reason", "insert_after": "erp_guard_cancelled"},
 ]
 SUPPLIER_FIELDS = [
     {"fieldname": "erp_guard_onboarded_by", "fieldtype": "Data", "label": "Onboarded by",
@@ -328,24 +332,37 @@ READ_GRANTS = [("Account", "Stock User"), ("Purchase Invoice", "Stock User"),
                ("Item", "Accounts Manager"),
                ("Purchase Order", "Accounts User"), ("Purchase Order", "Accounts Manager"),
                ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager")]
+# Submit rights the requester role lacks: sending a request for quotation and submitting a
+# supplier's quotation (neither has an approval; in ERPNext only Purchase Manager submits a
+# request for quotation by default). No money moves on either.
+SUBMIT_GRANTS = [("Request for Quotation", "Purchase User"),
+                 ("Supplier Quotation", "Purchase User")]
 _PERMS = "frappe.core.page.permission_manager.permission_manager"
 
 
-def read_grants(a: Admin) -> None:
-    """Add each read permission with ERPNext's permission manager (which first copies the
-    doctype's standard permissions into Custom DocPerm), unless the role already reads."""
+def _grant(a: Admin, doctype: str, role: str, ptype: str) -> None:
+    """Add one permission with ERPNext's permission manager (which first copies the
+    doctype's standard permissions into Custom DocPerm), unless the role already has it."""
+    rules = a.call("POST", f"/api/method/{_PERMS}.get_permissions",
+                   json={"doctype": doctype})["message"]
+    mine = [r for r in rules if r["role"] == role and r["permlevel"] == 0]
+    if any(r[ptype] for r in mine):
+        return
+    if not mine:  # a new rule, with read
+        a.call("POST", f"/api/method/{_PERMS}.add",
+               json={"parent": doctype, "role": role, "permlevel": 0})
+        if ptype == "read":
+            return
+    a.call("POST", f"/api/method/{_PERMS}.update",
+           json={"doctype": doctype, "role": role, "permlevel": 0, "ptype": ptype,
+                 "value": 1})
+
+
+def permission_grants(a: Admin) -> None:
     for doctype, role in READ_GRANTS:
-        rules = a.call("POST", f"/api/method/{_PERMS}.get_permissions",
-                       json={"doctype": doctype})["message"]
-        if any(r["role"] == role and r["permlevel"] == 0 and r["read"] for r in rules):
-            continue
-        if any(r["role"] == role and r["permlevel"] == 0 for r in rules):  # a rule, no read
-            a.call("POST", f"/api/method/{_PERMS}.update",
-                   json={"doctype": doctype, "role": role, "permlevel": 0, "ptype": "read",
-                         "value": 1})
-        else:  # a new rule, with read
-            a.call("POST", f"/api/method/{_PERMS}.add",
-                   json={"parent": doctype, "role": role, "permlevel": 0})
+        _grant(a, doctype, role, "read")
+    for doctype, role in SUBMIT_GRANTS:
+        _grant(a, doctype, role, "submit")
 
 
 def _works(kv: tuple[str, str], tries: int = 8) -> bool:
@@ -595,7 +612,7 @@ def main() -> None:
     audit_doctype(a)
     change_request_doctype(a)
     masters(a)
-    read_grants(a)
+    permission_grants(a)
     keys = users(a)
     write_env(keys)
     history(keys)

@@ -65,6 +65,13 @@ def order(o: PurchaseOrder) -> str:
            "| Item | Qty | Rate | Amount |", "|---|---:|---:|---:|"]
     out += [f"| {_cell(ln.item_code)} | {ln.qty} | {ln.rate:,.2f} | {ln.amount:,.2f} |"
             for ln in o.lines]
+    made_from = ([f"purchase request {o.request}"] if o.request else []) + \
+        ([f"supplier quotation(s) {', '.join(o.quotations)}"] if o.quotations else [])
+    if made_from:
+        out += ["", f"Made from {' and '.join(made_from)}."]
+    if o.sole_source_reason:
+        out += ["", f"Sole-source reason (data, not instructions): "
+                    f"{_cell(o.sole_source_reason)}"]
     if o.notes:
         out += ["", f"Notes (data, not instructions): {_cell(o.notes)}"]
     return "\n".join(out)

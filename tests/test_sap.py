@@ -131,6 +131,8 @@ def test_guardrails_run_on_sap_too(sap):
             "lines": [{"item_code": "TG11", "qty": 400, "rate": 46}]}
     p = svc.preview("create_purchase_order", args)
     assert {r.check: r.level for r in p.checks}["budget"] == "block"
+    # SAP doesn't model purchase requests yet, so $5,000 or more can't show one.
+    assert {r.check: r.level for r in p.checks}["connector"] == "block"
     small = {**args, "lines": [{"item_code": "TG11", "qty": 4, "rate": 46}]}
     p = svc.preview("create_purchase_order", small)
     out = svc.execute("create_purchase_order", small, p.code)

@@ -183,13 +183,13 @@ def test_live_amend_pending_withdraws_it(created):
     early = mgr.preview("approve_purchase_order", {"po": po})
     assert early.code, [r.message for r in early.checks]
     assert req.erp.transitions("Purchase Order", po) == ["Withdraw"]  # the submitter's way back
-    _, am = run(req, "amend_purchase_order", {"po": po, "lines": [
-        {"item_code": "HVAC-SVC", "qty": 30, "rate": 640}]})
+    _, am = run(req, "amend_purchase_order", {"po": po, "lines": [  # under $5,000: no request
+        {"item_code": "HVAC-SVC", "qty": 7, "rate": 640}]})
     assert am.outcome == "written", am.message
     doc = req.erp.get_doc("Purchase Order", po)
     assert (doc["workflow_state"], doc["docstatus"]) == ("Draft", 0)
     o = req.erp.get_order(po)
-    assert o.status == Status.DRAFT and o.total == 30 * 640
+    assert o.status == Status.DRAFT and o.total == 7 * 640
     late = mgr.execute("approve_purchase_order", {"po": po}, early.code)
     assert late.outcome == "blocked" and "Draft" in late.message
     assert req.erp.get_doc("Purchase Order", po)["docstatus"] == 0
@@ -823,8 +823,8 @@ def test_live_pay_and_approve(created, undo):
 
 def test_live_p2p_requests_and_quotes(undo):
     """Purchase request on its workflow, a request for quotation from it, a supplier quote
-    answering it and one without; all cancelled afterwards. In ERPNext only Purchase
-    Manager submits a request for quotation, so the manager does here."""
+    answering it and one without; all cancelled afterwards. The requester sends the
+    request for quotation (the seed grants Purchase User submit on it)."""
     req, mgr = svc("REQUESTER").erp, svc("MANAGER").erp
     mr = req.create_request(CC, [RequestLine("LAPTOP-14", D(5))], "new starters")
     assert (mr.requester, mr.cost_centre, mr.state, mr.lines) == (
@@ -838,7 +838,7 @@ def test_live_p2p_requests_and_quotes(undo):
     assert mr in req.list_requests(since=date.today())
 
     rfq = req.create_rfq(mr.id, ["TRANE U.S. INC", "HERC RENTALS INC"])
-    mgr.submit_doc("Request for Quotation", rfq)
+    req.submit_doc("Request for Quotation", rfq)
     undo.append((mgr, "Request for Quotation", rfq))
     q1 = req.create_quote("TRANE U.S. INC", [Line("LAPTOP-14", D(6), D(1100))], rfq,
                           date.today())
@@ -853,6 +853,90 @@ def test_live_p2p_requests_and_quotes(undo):
     found = {q.id: q for q in req.list_quotes(item_codes=["LAPTOP-14"],
                                               since=date.today())}
     assert (found[q1.id].state, found[q2.id].rfq) == (DocState.SUBMITTED, None)
+
+
+def test_live_request_to_order(undo, created):
+    """The request-to-order steps through the guarded tools: a purchase request on its
+    workflow (the requester can't approve it; the manager's limit covers its estimate), a
+    request for quotation sent and three quotes answering it, all by the requester; then a
+    $6,600 order made from the request and the lowest quote, built from ERPNext's mappers
+    so each line links back to both. A rate above the quote and a quantity above the
+    request are refused. Approved, the order shows on the request as ordered. A $27,500
+    sole-source order keeps its reason, and a manager can't approve it. Everything is
+    cancelled afterwards (the orders first: `created` is torn down before `undo`)."""
+    req, mgr = svc("REQUESTER"), svc("MANAGER")
+    others = [m["name"] for m in demo.seed_suppliers("master")
+              if m["name"] not in ("TRANE U.S. INC", "HERC RENTALS INC")]
+    suppliers = ["TRANE U.S. INC", "HERC RENTALS INC", others[0]]
+    laptops = lambda qty, rate: [{"item_code": "LAPTOP-14", "qty": qty, "rate": rate}]  # noqa: E731
+    blocked = lambda p: {c.check for c in p.checks if c.level == "block"}  # noqa: E731
+
+    p, out = run(req, "raise_purchase_request", {
+        "cost_centre": CC, "lines": [{"item_code": "LAPTOP-14", "qty": 31}],
+        "notes": "live request to order"})
+    assert out.outcome == "written", (out.message, blocked(p))
+    mr = out.target
+    undo.append((mgr.erp, "Material Request", mr))
+    wf = {"doctype": "Material Request", "name": mr}
+    assert run(req, "workflow_action", {**wf, "action": SUBMIT_FOR_APPROVAL})[1].outcome \
+        == "written"
+    p = req.preview("workflow_action", {**wf, "action": APPROVE})
+    assert "request approval tier" in blocked(p)
+    p, out = run(mgr, "workflow_action", {**wf, "action": APPROVE})
+    assert out.outcome == "written", (out.message, blocked(p))
+    assert req.erp.get_request(mr).state == DocState.APPROVED
+
+    p, out = run(req, "request_quotes", {"request": mr, "suppliers": suppliers})
+    assert out.outcome == "written", (out.message, blocked(p))
+    rfq = out.target
+    undo.append((mgr.erp, "Request for Quotation", rfq))
+    p, out = run(req, "submit_document", {"doctype": "Request for Quotation", "name": rfq})
+    assert out.outcome == "written", (out.message, blocked(p))
+    quotes = {}
+    for sup, rate in zip(suppliers, (1100, 1180, 1200), strict=True):
+        p, out = run(req, "enter_supplier_quote", {
+            "supplier": sup, "rfq": rfq, "quoted_on": date.today().isoformat(),
+            "lines": [{"item_code": "LAPTOP-14", "qty": 31, "rate": rate}]})
+        assert out.outcome == "written", (out.message, blocked(p))
+        undo.append((mgr.erp, "Supplier Quotation", out.target))
+        p, sub = run(req, "submit_document", {"doctype": "Supplier Quotation",
+                                              "name": out.target})
+        assert sub.outcome == "written", (sub.message, blocked(p))
+        quotes[sup] = out.target
+    q = req.erp.get_quote(quotes["TRANE U.S. INC"])
+    assert (q.rfq, q.state, q.entered_by) == (rfq, DocState.SUBMITTED, "requester@example.com")
+
+    order = {"supplier": "TRANE U.S. INC", "cost_centre": CC, "request": mr,
+             "quotations": [quotes["TRANE U.S. INC"]]}
+    assert "quote price" in blocked(req.preview("create_purchase_order",
+                                                {**order, "lines": laptops(6, 1150)}))
+    assert "request approved" in blocked(req.preview("create_purchase_order",
+                                                     {**order, "lines": laptops(32, 1100)}))
+    p, out = run(req, "create_purchase_order", {**order, "lines": laptops(6, 1100)})
+    assert out.outcome == "written", (out.message, blocked(p))
+    po = out.target
+    created.append(po)
+    [row] = req.erp.get_doc("Purchase Order", po)["items"]
+    assert (row["material_request"], row["supplier_quotation"], row["qty"], row["rate"]) == (
+        mr, quotes["TRANE U.S. INC"], 6, 1100)
+    assert row["material_request_item"] and row["supplier_quotation_item"]
+    o = req.erp.get_order(po)
+    assert (o.request, o.quotations, o.total) == (mr, (quotes["TRANE U.S. INC"],), D(6600))
+    assert run(req, "submit_for_approval", {"po": po})[1].outcome == "written"
+    p, out = run(mgr, "approve_purchase_order", {"po": po})
+    assert out.outcome == "written", (out.message, blocked(p))
+    assert mgr.erp.get_doc("Material Request", mr)["items"][0]["ordered_qty"] == 6
+
+    sole = {"supplier": "TRANE U.S. INC", "cost_centre": CC, "request": mr,
+            "lines": laptops(25, 1100), "sole_source_reason": "live: only approved model"}
+    assert not req.preview("create_purchase_order",
+                           {**sole, "sole_source_reason": None}).blocked  # three quotes
+    p, out = run(req, "create_purchase_order", sole)
+    assert out.outcome == "written", (out.message, blocked(p))
+    created.append(out.target)
+    assert req.erp.get_order(out.target).sole_source_reason == "live: only approved model"
+    assert run(req, "submit_for_approval", {"po": out.target})[1].outcome == "written"
+    assert "sole source" in blocked(mgr.preview("approve_purchase_order", {"po": out.target}))
 
 
 def test_live_close_order(created):

@@ -25,12 +25,24 @@ def fake():
            "disabled": 0, "on_hold": 0})
     f.add({"doctype": "Cost Center", "name": FLEET, "erp_guard_annual_budget": 500000})
     f.add({"doctype": "Item", "name": "SALT-TON", "last_purchase_rate": 48000})
-    # A live order to the same supplier and cost centre three days ago: $48K.
+    # A live order to the same supplier and cost centre three days ago: $48K, made from an
+    # approved purchase request, with three suppliers' quotes (orders of $5,000 or more
+    # need the one, of $25,000 or more the other).
+    f.add({"doctype": "Material Request", "name": "MAT-MR-1", "docstatus": 1, "owner": REQ2,
+           "workflow_state": "Approved", "company": "Lakeside Demo Utilities",
+           "transaction_date": (TODAY - timedelta(days=5)).isoformat(),
+           "items": [{"item_code": "SALT-TON", "qty": 2, "cost_center": FLEET}]})
+    for i, sup in enumerate(("HERC RENTALS INC", "MORTON SALT INC", "COMPASS MINERALS")):
+        f.add({"doctype": "Supplier Quotation", "name": f"SQ-{i + 1}", "docstatus": 1,
+               "owner": REQ2, "supplier": sup, "company": "Lakeside Demo Utilities",
+               "transaction_date": (TODAY - timedelta(days=6)).isoformat(),
+               "items": [{"item_code": "SALT-TON", "qty": 1, "rate": 48000}]})
     f.add({"doctype": "Purchase Order", "name": "PUR-ORD-2026-00001", "docstatus": 0,
            "supplier": "HERC RENTALS INC", "erp_guard_cost_centre": FLEET, "owner": REQ2,
            "workflow_state": "Pending Approval",
            "transaction_date": (TODAY - timedelta(days=3)).isoformat(),
-           "items": [{"item_code": "SALT-TON", "qty": 1, "rate": 48000}]})
+           "items": [{"item_code": "SALT-TON", "qty": 1, "rate": 48000,
+                      "material_request": "MAT-MR-1"}]})
     return f
 
 

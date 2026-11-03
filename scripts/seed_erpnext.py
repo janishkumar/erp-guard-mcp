@@ -306,8 +306,10 @@ def bank(a: Admin) -> None:
 
 # Read access the design's roles lack in ERPNext but need for their own work:
 # (doctype, role). A receipt reads the company's accounts; submitting an invoice reads its
-# items; invoicing and approving invoices read the order and receipt they match.
-READ_GRANTS = [("Account", "Stock User"), ("Item", "Accounts Manager"),
+# items; invoicing and approving invoices read the order and receipt they match; cancelling
+# a receipt first looks for invoices against it.
+READ_GRANTS = [("Account", "Stock User"), ("Purchase Invoice", "Stock User"),
+               ("Item", "Accounts Manager"),
                ("Purchase Order", "Accounts User"), ("Purchase Order", "Accounts Manager"),
                ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager")]
 _PERMS = "frappe.core.page.permission_manager.permission_manager"

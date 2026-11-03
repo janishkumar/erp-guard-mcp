@@ -5,8 +5,10 @@ Supported so far, each by translating the generic write onto the v1 tool for the
 and running its checks: creating a Purchase Order (`create_purchase_order`), and its
 workflow actions Submit for Approval, Approve and Reject (`submit_for_approval`,
 `approve_purchase_order`, `reject_purchase_order`, the comment being the reason). Revise
-and Withdraw happen only inside `amend_purchase_order`. Every other operation on a P2P-owned type is
-refused until its task tools land.
+and Withdraw happen only inside `amend_purchase_order`. Cancelling a Purchase Receipt runs
+its own checks (packs.p2p.receipts); receipts are otherwise written by `receive_goods` and
+`return_goods`. Every other operation on a P2P-owned type is refused until its task tools
+land.
 """
 
 from __future__ import annotations
@@ -16,7 +18,15 @@ from typing import TYPE_CHECKING
 from erp_guard.checks import BLOCK, CheckResult
 from erp_guard.connectors.base import ErpError
 from erp_guard.ops import Op, Write
-from erp_guard.packs.p2p import APPROVE, P2P_OWNED, REJECT, REVISE, SUBMIT_FOR_APPROVAL, WITHDRAW
+from erp_guard.packs.p2p import (
+    APPROVE,
+    P2P_OWNED,
+    REJECT,
+    REVISE,
+    SUBMIT_FOR_APPROVAL,
+    WITHDRAW,
+    receipts,
+)
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -33,6 +43,13 @@ _PO_WORKFLOW: dict[str, tuple[str, str | None]] = {
 }
 
 
+# (document type, operation) -> (evaluate, write) for writes with checks of their own and no
+# v1-style action behind them.
+_DIRECT = {
+    ("Purchase Receipt", Op.CANCEL): (receipts.evaluate_cancel, receipts.apply_cancel),
+}
+
+
 def _refuse(message: str) -> CheckResult:
     return CheckResult("pack", BLOCK, message, {"pack": "purchase-to-pay"})
 
@@ -45,6 +62,7 @@ class P2PPack:
         "Purchase Order": ("create_purchase_order", "submit_for_approval",
                            "approve_purchase_order", "reject_purchase_order",
                            "cancel_purchase_order", "amend_purchase_order"),
+        "Purchase Receipt": ("receive_goods", "return_goods"),
         "Supplier": ("onboard_supplier",),
     }
 
@@ -107,6 +125,8 @@ class P2PPack:
         return self._canon(svc, "create_purchase_order", args)
 
     def evaluate_write(self, svc: Service, w: Write) -> tuple[str, list[CheckResult]]:
+        if (direct := _DIRECT.get((w.doctype, w.op))):
+            return direct[0](svc, w)
         route = self._route(svc, w)
         if isinstance(route, CheckResult):
             return f"{w.op.value.capitalize()} {w.doctype} {w.name or ''}".rstrip() + ".", \
@@ -115,6 +135,8 @@ class P2PPack:
         return svc.actions[name].evaluate(svc, canon)
 
     def apply_write(self, svc: Service, w: Write) -> tuple[str, str]:
+        if (direct := _DIRECT.get((w.doctype, w.op))):
+            return direct[1](svc, w)
         route = self._route(svc, w)
         if isinstance(route, CheckResult):  # evaluate blocks first; never reached
             raise ErpError(route.message)

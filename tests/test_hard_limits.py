@@ -41,7 +41,7 @@ def test_connector_protocol_has_no_forbidden_methods():
 
 def test_no_tool_can_pay_bank_or_delete():
     tools = [t.name for t in asyncio.run(server.mcp.list_tools())]
-    assert len(tools) == 24
+    assert len(tools) == 26
     assert not [n for n in tools if any(f in n.lower() for f in FORBIDDEN)]
 
 

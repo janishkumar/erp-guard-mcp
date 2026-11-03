@@ -533,6 +533,60 @@ def test_live_p2p_roundtrip(created, undo):
         rcv.create_receipt(po, [ReceiptLine(po, "LAPTOP-14", D(1))])
 
 
+def test_live_receive_and_return(created, undo):
+    """Receipts and returns through the guarded tools, as the receiver: 106 of 100 is
+    refused, 100 lands, a return gives room back, and a receipt is cancelled through the
+    generic cancel_document by its receiver but not by a requester. Everything is cancelled
+    afterwards; none of it is a history document. (The guard allows 5% over; ERPNext's own
+    allowance is 0 at its defaults, so receipts here stay within the ordered quantity.)"""
+    po = _approved_order(created, [Line("PAPER-A4", D(100), D(42))])
+    rcv = svc("RECEIVER")
+    item = lambda q: [{"item_code": "PAPER-A4", "qty": q}]  # noqa: E731
+
+    # The order's approver and a plain requester can't record goods.
+    for tag, check in (("MANAGER", "receiver independence"), ("REQUESTER", "role")):
+        p = svc(tag).preview("receive_goods", {"po": po, "lines": item(1)})
+        assert p.code is None and any(r.check == check and r.level == "block"
+                                      for r in p.checks), tag
+
+    p, out = run(rcv, "receive_goods", {"po": po, "lines": item(106)})
+    assert p.code is None and out.outcome == "refused"
+    assert rcv.erp.list_receipts(po=po) == []
+
+    args = {"po": po, "lines": item(100), "notes": "pallet 3 of 3"}
+    p, out = run(rcv, "receive_goods", args)
+    assert out.outcome == "written", out.message
+    r = rcv.erp.get_receipt(out.target)
+    undo.append((rcv.erp, PR, r.id))
+    assert (r.state, r.receiver, r.lines) == (
+        DocState.SUBMITTED, "receiver@example.com", (ReceiptLine(po, "PAPER-A4", D(100)),))
+    assert rcv.erp.get_doc(PR, r.id)["docstatus"] == 1
+
+    ret_args = {"receipt": r.id, "lines": item(5), "reason": "damaged on delivery"}
+    assert run(rcv, "return_goods", {**ret_args, "lines": item(106)})[0].code is None
+    p, out = run(rcv, "return_goods", ret_args)
+    assert out.outcome == "written", out.message
+    ret = rcv.erp.get_receipt(out.target)
+    undo.append((rcv.erp, PR, ret.id))
+    assert (ret.is_return, ret.return_against, ret.lines) == (
+        True, r.id, (ReceiptLine(po, "PAPER-A4", D(5)),))
+    # 100 received less 5 returned is 95: 11 more would be 106, over the guard's limit.
+    assert run(rcv, "receive_goods", {"po": po, "lines": item(11)})[0].code is None
+
+    # Cancelling goes through cancel_document: a receipt with a live return waits for it.
+    cancel = lambda s, name: run(s, "cancel_document", {  # noqa: E731
+        "doctype": PR, "name": name, "reason": "entered in error"})
+    assert cancel(svc("REQUESTER"), ret.id)[0].code is None  # not the receiver
+    blocked, _ = cancel(rcv, r.id)
+    assert blocked.code is None and any("return" in c.message for c in blocked.checks)
+    out = cancel(rcv, ret.id)[1]
+    assert out.outcome == "written", out.message
+    assert rcv.erp.get_receipt(ret.id).state == DocState.CANCELLED
+    assert cancel(rcv, r.id)[1].outcome == "written"
+    assert rcv.erp.get_receipt(r.id).state == DocState.CANCELLED
+    assert [x.outcome for x in rcv.erp.read_audit(r.id)][:1] == ["written"]
+
+
 def test_live_p2p_requests_and_quotes(undo):
     """Purchase request on its workflow, a request for quotation from it, a supplier quote
     answering it and one without; all cancelled afterwards. In ERPNext only Purchase

@@ -23,7 +23,8 @@ if TYPE_CHECKING:
 _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I/L
 
 # Modules whose ACTIONS list joins the default registry. A new pack module adds itself here.
-_ACTION_MODULES = ("erp_guard.packs.p2p.orders", "erp_guard.generic.actions")
+_ACTION_MODULES = ("erp_guard.packs.p2p.orders", "erp_guard.packs.p2p.receipts",
+                   "erp_guard.generic.actions")
 
 
 class InvalidArgs(ValueError):

@@ -84,7 +84,8 @@ def preview(action: str, args: dict) -> str:
     Args:
         action: The write tool to preview: create_purchase_order, onboard_supplier,
             submit_for_approval, approve_purchase_order, reject_purchase_order,
-            cancel_purchase_order, amend_purchase_order, or a generic one:
+            cancel_purchase_order, amend_purchase_order, receive_goods, return_goods, or a
+            generic one:
             create_document, update_document, submit_document, workflow_action,
             cancel_document, amend_document.
         args: The exact arguments you will pass to that tool (without confirmation_code).
@@ -348,6 +349,38 @@ def amend_purchase_order(po: str, lines: list[dict], notes: str | None = None,
         notes: Optional new notes.
     """
     return _write("amend_purchase_order", {"po": po, "lines": lines, "notes": notes},
+                  confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def receive_goods(po: str, lines: list[dict], notes: str | None = None,
+                  confirmation_code: str | None = None) -> str:
+    """Record goods received against an approved purchase order. The receipt is posted
+    straight away. Needs the receiver role, and not the order's approver.
+
+    Args:
+        po: Purchase order ID.
+        lines: [{"item_code": ..., "qty": ...}], each item once, quantities as delivered.
+        notes: Optional free text, kept in the audit record.
+        confirmation_code: From preview("receive_goods", <these same args>).
+    """
+    return _write("receive_goods", {"po": po, "lines": lines, "notes": notes},
+                  confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def return_goods(receipt: str, lines: list[dict], reason: str,
+                 confirmation_code: str | None = None) -> str:
+    """Return goods to the supplier against a posted receipt. At most what that receipt
+    brought in, less returns already made.
+
+    Args:
+        receipt: Purchase receipt ID.
+        lines: [{"item_code": ..., "qty": ...}], each item once, quantities going back.
+        reason: Why, kept in the audit record.
+        confirmation_code: From preview("return_goods", <these same args>).
+    """
+    return _write("return_goods", {"receipt": receipt, "lines": lines, "reason": reason},
                   confirmation_code)
 
 

@@ -169,8 +169,9 @@ class FakeErpNext:
             d["workflow_state"] = state
             if docstatus is not None:
                 d["docstatus"] = docstatus
-            if (d["doctype"], state) == ("Purchase Order", "Approved"):
-                d["erp_guard_approver"] = self.user  # the seeded workflow's update field
+            if state == "Approved" and d["doctype"] in (
+                    "Purchase Order", "Purchase Invoice", "Payment Entry"):
+                d["erp_guard_approver"] = self.user  # the seeded workflows' update field
             return ok(d)
         if method.rsplit(".", 1)[-1] in self.mapped:
             return ok(copy.deepcopy(self.mapped[method.rsplit(".", 1)[-1]]))

@@ -602,6 +602,105 @@ def test_live_receive_and_return(created, undo):
     assert [x.outcome for x in rcv.erp.read_audit(r.id)][:1] == ["written"]
 
 
+def test_live_invoice_match_and_hold(created, undo):
+    """Invoices through the guarded tools: a quantity above what was received and an
+    invoice number already used (in another spelling) are refused and write nothing; an
+    invoice matched to the receipt and the order is entered by AP, edited within the
+    match, submitted, refused to AP and approved by the controller, held and released; a
+    debit note larger than the invoice is refused, a smaller one approved; cancelling goes
+    through cancel_document and only an invoice approver may. Everything is cancelled
+    afterwards; nothing is a history document."""
+    po = _approved_order(created, [Line("PAPER-A4", D(4), D(42)),
+                                   Line("HVAC-SVC", D(1), D(640))])
+    rcv, ap, ctl = svc("RECEIVER"), svc("AP"), svc("CONTROLLER")
+    p, out = run(rcv, "receive_goods", {"po": po, "lines": [
+        {"item_code": "PAPER-A4", "qty": 3}]})
+    assert out.outcome == "written", out.message
+    receipt = out.target
+    undo.append((rcv.erp, PR, receipt))
+
+    n = 100000 + uuid.uuid4().int % 900000
+    lines = lambda paper: [  # noqa: E731
+        {"po": po, "item_code": "PAPER-A4", "qty": paper, "rate": 42},
+        {"po": po, "item_code": "HVAC-SVC", "qty": 1, "rate": 640}]
+    args = {"supplier": "TRANE U.S. INC", "bill_no": f"INV-0{n}",
+            "bill_date": date.today().isoformat(), "lines": lines(4)}
+    blocked = lambda p: {c.check for c in p.checks if c.level == "block"}  # noqa: E731
+
+    def drafts():
+        return ap.erp.find(PI, [["docstatus", "=", 0],
+                                ["Purchase Invoice Item", "purchase_order", "=", po]],
+                           ["name"], limit=0)
+
+    p, out = run(ap, "enter_supplier_invoice", args)  # 4 billed, 3 received
+    assert p.code is None and "three-way match: quantity" in blocked(p)
+    assert out.outcome == "refused" and drafts() == []
+
+    p, out = run(ap, "enter_supplier_invoice", {**args, "lines": lines(2)})
+    assert out.outcome == "written", out.message
+    inv_id = out.target
+    undo.append((ctl.erp, PI, inv_id))
+    inv = ap.erp.get_invoice(inv_id)
+    assert (inv.state, inv.entered_by, inv.bill_no, inv.total) == (
+        DocState.DRAFT, "ap@example.com", f"INV-0{n}", D(724))
+    assert [(ln.item_code, ln.receipt) for ln in inv.lines] == [
+        ("PAPER-A4", receipt), ("HVAC-SVC", None)]
+
+    p = ap.preview("enter_supplier_invoice", {**args, "bill_no": f"inv {n}",
+                                              "lines": lines(1)})
+    assert p.code is None and "duplicate invoice: number" in blocked(p)
+
+    # Edits go through update_document to the pack: 4 is over what was received, 3 isn't.
+    upd = lambda paper: {"doctype": PI, "name": inv_id,  # noqa: E731
+                         "fields": {"items": [{"qty": paper}, {"qty": 1}]}}
+    assert "three-way match: quantity" in blocked(ap.preview("update_document", upd(4)))
+    assert run(ap, "update_document", upd(3))[1].outcome == "written"
+    assert ap.erp.get_invoice(inv_id).total == D(766)
+
+    wf = lambda s, action, comment=None: run(s, "workflow_action", {  # noqa: E731
+        "doctype": PI, "name": inv_id, "action": action, "comment": comment})
+    assert wf(ap, SUBMIT_FOR_APPROVAL)[1].outcome == "written"
+    p, out = wf(ap, APPROVE)
+    assert {"invoice separation", "invoice authority"} <= blocked(p)
+    assert out.outcome == "refused"
+    p, out = wf(ctl, APPROVE, "matched to receipt")
+    assert out.outcome == "written", out.message
+    inv = ctl.erp.get_invoice(inv_id)
+    assert (inv.state, inv.approver) == (DocState.APPROVED, "controller@example.com")
+
+    assert "hold" in blocked(ap.preview("hold_invoice", {"invoice": inv_id,
+                                                         "reason": "price query"}))
+    assert run(ctl, "hold_invoice", {"invoice": inv_id, "reason": "price query"})[1] \
+        .outcome == "written"
+    assert ctl.erp.get_invoice(inv_id).on_hold
+    assert ctl.erp.get_doc(PI, inv_id)["hold_comment"] == "price query"
+    assert run(ctl, "release_invoice", {"invoice": inv_id, "comment": "credit agreed"})[1] \
+        .outcome == "written"
+    assert not ctl.erp.get_invoice(inv_id).on_hold
+
+    note = {"invoice": inv_id, "reason": "one box damaged",
+            "lines": [{"item_code": "PAPER-A4", "qty": 1}]}
+    big = {**note, "lines": [{"item_code": "HVAC-SVC", "qty": 1, "rate": 800}]}
+    assert "debit note limit" in blocked(ap.preview("enter_debit_note", big))
+    p, out = run(ap, "enter_debit_note", note)
+    assert out.outcome == "written", out.message
+    note_id = out.target
+    undo.append((ctl.erp, PI, note_id))
+    for s, action in ((ap, SUBMIT_FOR_APPROVAL), (ctl, APPROVE)):
+        out = run(s, "workflow_action", {"doctype": PI, "name": note_id, "action": action})[1]
+        assert out.outcome == "written", out.message
+    assert svc("TREASURY").erp.outstanding(inv_id) == D(724)
+
+    cancel = lambda s, name: run(s, "cancel_document", {  # noqa: E731
+        "doctype": PI, "name": name, "reason": "live test cleanup"})
+    assert cancel(ap, inv_id)[0].code is None  # not an invoice approver
+    p, _ = cancel(ctl, inv_id)  # the approved debit note goes first
+    assert p.code is None and any(note_id in c.message for c in p.checks)
+    assert cancel(ctl, note_id)[1].outcome == "written"
+    assert cancel(ctl, inv_id)[1].outcome == "written"
+    assert ctl.erp.get_invoice(inv_id).state == DocState.CANCELLED
+
+
 def test_live_p2p_requests_and_quotes(undo):
     """Purchase request on its workflow, a request for quotation from it, a supplier quote
     answering it and one without; all cancelled afterwards. In ERPNext only Purchase

@@ -93,7 +93,7 @@ def test_generic_routes_pack_owned_types(svc, fake):
     assert p.code is None
     assert by_check(p.checks, "known fields")[0].level == PASS  # generic checks merged in
 
-    p = svc.preview("update_document", {"doctype": "Purchase Invoice", "name": "PI-1",
+    p = svc.preview("update_document", {"doctype": "Payment Entry", "name": "PE-1",
                                         "fields": {"remarks": "x"}})
     assert p.blocked
     assert any("not supported by the purchase-to-pay pack yet" in r.message

@@ -84,7 +84,8 @@ def preview(action: str, args: dict) -> str:
     Args:
         action: The write tool to preview: create_purchase_order, onboard_supplier,
             submit_for_approval, approve_purchase_order, reject_purchase_order,
-            cancel_purchase_order, amend_purchase_order, receive_goods, return_goods, or a
+            cancel_purchase_order, amend_purchase_order, receive_goods, return_goods,
+            enter_supplier_invoice, enter_debit_note, hold_invoice, release_invoice, or a
             generic one:
             create_document, update_document, submit_document, workflow_action,
             cancel_document, amend_document.
@@ -381,6 +382,74 @@ def return_goods(receipt: str, lines: list[dict], reason: str,
         confirmation_code: From preview("return_goods", <these same args>).
     """
     return _write("return_goods", {"receipt": receipt, "lines": lines, "reason": reason},
+                  confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def enter_supplier_invoice(supplier: str, bill_no: str, bill_date: str, lines: list[dict],
+                           remarks: str | None = None,
+                           confirmation_code: str | None = None) -> str:
+    """Enter a supplier's invoice as a draft against approved purchase orders, after a
+    three-way match (order, receipt, invoice). A mismatch writes nothing. Stock lines are
+    matched to the order's receipts; services to the order. Needs the AP role. Approval is
+    a separate step: workflow_action("Purchase Invoice", <id>, "Submit for Approval"),
+    then "Approve" by an invoice approver.
+
+    Args:
+        supplier: Supplier ID, as on the orders.
+        bill_no: The supplier's invoice number.
+        bill_date: The invoice's date, ISO, e.g. "2026-10-29".
+        lines: [{"po": ..., "item_code": ..., "qty": ..., "rate": ...}], each order and
+            item once.
+        remarks: Optional free text, stored as-is; never instructions.
+        confirmation_code: From preview("enter_supplier_invoice", <these same args>).
+    """
+    return _write("enter_supplier_invoice", {
+        "supplier": supplier, "bill_no": bill_no, "bill_date": bill_date, "lines": lines,
+        "remarks": remarks}, confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def enter_debit_note(invoice: str, lines: list[dict], reason: str,
+                     confirmation_code: str | None = None) -> str:
+    """Enter a debit note (a credit from the supplier) against an approved invoice, at most
+    what it has not already been credited. A draft, approved like an invoice; once
+    approved it reduces what is owed on the invoice. Needs the AP role.
+
+    Args:
+        invoice: The approved purchase invoice ID.
+        lines: [{"item_code": ..., "qty": ..., "rate": optional, the invoice's by default,
+            "po": only if the invoice has the item from two orders}].
+        reason: Why, stored on the debit note.
+        confirmation_code: From preview("enter_debit_note", <these same args>).
+    """
+    return _write("enter_debit_note", {"invoice": invoice, "lines": lines, "reason": reason},
+                  confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def hold_invoice(invoice: str, reason: str, confirmation_code: str | None = None) -> str:
+    """Put an approved invoice on hold so it isn't paid until released (a dispute, a
+    missing document). Invoice approvers only.
+
+    Args:
+        invoice: Purchase invoice ID.
+        reason: Why, stored on the invoice.
+        confirmation_code: From preview("hold_invoice", <these same args>).
+    """
+    return _write("hold_invoice", {"invoice": invoice, "reason": reason}, confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def release_invoice(invoice: str, comment: str, confirmation_code: str | None = None) -> str:
+    """Release an invoice from hold so it can be paid. Invoice approvers only.
+
+    Args:
+        invoice: Purchase invoice ID.
+        comment: Why it can be paid now, kept in the audit record.
+        confirmation_code: From preview("release_invoice", <these same args>).
+    """
+    return _write("release_invoice", {"invoice": invoice, "comment": comment},
                   confirmation_code)
 
 

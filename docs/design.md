@@ -233,7 +233,7 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | New supplier | payment approve | Supplier onboarded in the last 90 days with no earlier submitted payment: approver is a director or above | block |
 | Paying account | payment | Paid from the company's designated bank account (policy) | block |
 | Close PO | close | Fully received and invoiced, or a reason is given and the closer is an approver; no draft receipt or invoice references the PO | block |
-| Hold | hold, release | Only invoice approvers; a reason is required. Holds are the controller's discretion (a dispute, a missing document), not the match's failure path | block |
+| Hold | hold, release | Only invoice approvers; a reason is required. Only approved invoices with something still owed are held (ERPNext holds nothing else). Holds are the controller's discretion (a dispute, a missing document), not the match's failure path | block |
 | Cancel receipt | cancel | No submitted invoice against it (ERPNext also refuses); only receiver or an approver | block |
 | Cancel invoice | cancel | No payment against it; only an invoice approver; reason required | block |
 | Cancel payment | cancel | Only a payment approver who isn't the payer; reason required | block |

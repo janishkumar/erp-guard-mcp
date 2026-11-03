@@ -7,8 +7,10 @@ workflow actions Submit for Approval, Approve and Reject (`submit_for_approval`,
 `approve_purchase_order`, `reject_purchase_order`, the comment being the reason). Revise
 and Withdraw happen only inside `amend_purchase_order`. Cancelling a Purchase Receipt runs
 its own checks (packs.p2p.receipts); receipts are otherwise written by `receive_goods` and
-`return_goods`. Every other operation on a P2P-owned type is refused until its task tools
-land.
+`return_goods`. A Purchase Invoice's workflow actions, draft edits and cancellation run the
+invoice checks (packs.p2p.invoices); invoices and debit notes are entered by
+`enter_supplier_invoice` and `enter_debit_note`. Every other operation on a P2P-owned type
+is refused until its task tools land.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from erp_guard.packs.p2p import (
     REVISE,
     SUBMIT_FOR_APPROVAL,
     WITHDRAW,
+    invoices,
     receipts,
 )
 
@@ -47,6 +50,17 @@ _PO_WORKFLOW: dict[str, tuple[str, str | None]] = {
 # v1-style action behind them.
 _DIRECT = {
     ("Purchase Receipt", Op.CANCEL): (receipts.evaluate_cancel, receipts.apply_cancel),
+    ("Purchase Invoice", Op.WORKFLOW): (invoices.evaluate_workflow, invoices.apply_workflow),
+    ("Purchase Invoice", Op.UPDATE): (invoices.evaluate_update, invoices.apply_update),
+    ("Purchase Invoice", Op.CANCEL): (invoices.evaluate_cancel, invoices.apply_cancel),
+}
+# Unsupported operations whose step has a tool: the refusal names it.
+_INSTEAD = {
+    ("Purchase Invoice", Op.CREATE): "enter invoices with enter_supplier_invoice and debit "
+                                     "notes with enter_debit_note",
+    ("Purchase Invoice", Op.SUBMIT): "an invoice is submitted by approving it with "
+                                     "workflow_action",
+    ("Purchase Invoice", Op.AMEND): "enter a new invoice with enter_supplier_invoice",
 }
 
 
@@ -63,6 +77,8 @@ class P2PPack:
                            "approve_purchase_order", "reject_purchase_order",
                            "cancel_purchase_order", "amend_purchase_order"),
         "Purchase Receipt": ("receive_goods", "return_goods"),
+        "Purchase Invoice": ("enter_supplier_invoice", "enter_debit_note", "hold_invoice",
+                             "release_invoice"),
         "Supplier": ("onboard_supplier",),
     }
 
@@ -75,6 +91,9 @@ class P2PPack:
             return self._route_po_create(svc, w)
         if (w.doctype, w.op) == ("Purchase Order", Op.WORKFLOW):
             return self._route_po_workflow(svc, w)
+        if (instead := _INSTEAD.get((w.doctype, w.op))):
+            return _refuse(f"{w.op.value} on {w.doctype} is not supported by the "
+                           f"purchase-to-pay pack: {instead}.")
         return _refuse(f"{w.op.value} on {w.doctype} is not supported by the "
                        "purchase-to-pay pack yet.")
 

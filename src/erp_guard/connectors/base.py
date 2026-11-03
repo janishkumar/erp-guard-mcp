@@ -25,11 +25,20 @@ from erp_guard.packs.p2p.models import (
     ReceiptLine,
     Request,
     RequestLine,
+    not_editable,
 )
 
 
 class ErpError(Exception):
     """The ERP refused or failed a request."""
+
+
+def check_editable(doctype: str, fields: dict) -> None:
+    """Refuse a draft update outside the pack's editable fields (models.EDITABLE), with the
+    same message from every connector."""
+    bad = not_editable(doctype, fields)
+    if bad:
+        raise ErpError(f"{doctype} drafts can't have these changed: {', '.join(bad)}")
 
 
 class ErpConnector(Protocol):

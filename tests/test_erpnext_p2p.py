@@ -216,6 +216,8 @@ def test_payment_merges_references_and_sends_no_bank_fields(fake):
         (PI, 500.0), ("ACC-PINV-2", 66.0)]
     assert (sent["paid_amount"], sent["received_amount"], sent["paid_from"]) == (
         566.0, 566.0, BANK)
+    assert (sent["payment_type"], sent["party_type"], sent["party"]) == (
+        "Pay", "Supplier", SUP)
     assert not {"bank", "bank_account_no", "party_bank_account", "bank_account"} & set(sent)
     assert sent["reference_no"] == f"{PI}, ACC-PINV-2"
     assert (pay.amount, pay.state, pay.allocations[0]) == (
@@ -358,3 +360,160 @@ def test_change_request_submitted_then_applied_or_rejected(fake):
         erp.create_change_request("Supplier", SUP, {"default_bank_account": "x"})
     assert APPROVE in [c["action"] for c in fake.method_calls(
         "frappe.model.workflow.apply_workflow")]
+
+
+# --- review fixes: editable fields, payment totals, onboarding date, change requests ----
+
+def _drafts(fake):
+    """A draft invoice and a draft payment in the fake ERPNext."""
+    fake.add({**CO, "doctype": "Purchase Invoice", "name": "ACC-PINV-D", "docstatus": 0,
+              "owner": AP, "workflow_state": "Draft", "supplier": SUP,
+              "posting_date": "2026-11-01", "update_stock": 0, "is_paid": 0,
+              "items": [_row("Purchase Invoice Item", "PAPER-A4", 1, rate=42,
+                             purchase_order=PO)]})
+    fake.add({**CO, "doctype": "Payment Entry", "name": "ACC-PAY-D", "docstatus": 0,
+              "owner": "treasury@example.com", "workflow_state": "Draft", "party": SUP,
+              "posting_date": "2026-11-01", "paid_from": BANK, "paid_amount": 766.0,
+              "received_amount": 766.0, "payment_type": "Pay",
+              "references": [
+                  {"doctype": "Payment Entry Reference", "reference_doctype": PI_DT,
+                   "reference_name": PI, "allocated_amount": 700.0},
+                  {"doctype": "Payment Entry Reference", "reference_doctype": PI_DT,
+                   "reference_name": "ACC-PINV-2", "allocated_amount": 66.0}]})
+    return "ACC-PINV-D", "ACC-PAY-D"
+
+
+def _memory_drafts(erp):
+    from conftest import TODAY
+    inv = erp.as_user(AP).create_invoice(
+        "SUP-CANON", "M-1", TODAY, [InvoiceLine("PO-HIST1", "TONER-K", D(1), D(90))], "")
+    erp.workflow(PI_DT, inv.id, "Submit for Approval")
+    erp.as_user("controller@example.com").workflow(PI_DT, inv.id, APPROVE)
+    draft = erp.as_user(AP).create_invoice(
+        "SUP-CANON", "M-2", TODAY, [InvoiceLine("PO-HIST1", "TONER-K", D(1), D(90))], "")
+    pay = erp.create_payment("SUP-CANON", [Allocation(inv.id, D(50))], BANK)
+    return draft.id, pay.id
+
+
+PI_DT, PE_DT = "Purchase Invoice", "Payment Entry"
+REFUSED = [
+    (PI_DT, {"update_stock": 1}, "update_stock"),
+    (PI_DT, {"is_paid": 1}, "is_paid"),
+    (PI_DT, {"ignore_pricing_rule": 0}, "ignore_pricing_rule"),
+    (PI_DT, {"items": [{"qty": 2, "purchase_order": "PO-X"}]}, "items[].purchase_order"),
+    (PE_DT, {"payment_type": "Receive"}, "payment_type"),
+    (PE_DT, {"party": "OTHER"}, "party"),
+    (PE_DT, {"paid_amount": 1}, "paid_amount"),
+    (PE_DT, {"references": [{"reference_doctype": "Purchase Order"}, {}]},
+     "references[].reference_doctype"),
+    (PE_DT, {"paid_from": "Petty Cash - LDU"}, "paid_from"),
+    ("Purchase Order", {"items": [{"qty": 9}]}, "items"),
+]
+
+
+@pytest.mark.parametrize("doctype,fields,bad", REFUSED)
+def test_draft_updates_outside_editable_refused_on_both_connectors(fake, erp, doctype,
+                                                                     fields, bad):
+    msg = f"{doctype} drafts can't have these changed: {bad}"
+    ext = _erp(fake, allowed_bank_values={BANK})
+    names = dict(zip((PI_DT, PE_DT), _drafts(fake), strict=True))
+    with pytest.raises(ErpError) as exc:
+        ext.update_draft(doctype, names.get(doctype, PO), fields)
+    assert str(exc.value) == msg
+    assert not fake.method_calls("frappe.client.save")
+    mem = dict(zip((PI_DT, PE_DT), _memory_drafts(erp), strict=True))
+    with pytest.raises(ErpError) as exc2:
+        erp.update_draft(doctype, mem.get(doctype, "PO-HIST1"), fields)
+    assert str(exc2.value) == str(exc.value)
+
+
+def test_payment_allocation_edit_sets_the_paid_amount(fake):
+    _, pay = _drafts(fake)
+    _erp(fake, allowed_bank_values={BANK}).update_draft(
+        PE_DT, pay, {"references": [{"allocated_amount": 500}, {"allocated_amount": 66}],
+                     "remarks": "partial"})
+    saved = fake.method_calls("frappe.client.save")[-1]["doc"]
+    assert [r["allocated_amount"] for r in saved["references"]] == [500, 66]
+    assert (saved["paid_amount"], saved["received_amount"], saved["remarks"]) == (
+        566.0, 566.0, "partial")
+
+
+def test_payment_referencing_anything_but_invoices_is_refused(fake):
+    _, pay = _drafts(fake)
+    fake.docs[(PE_DT, pay)]["references"][1]["reference_doctype"] = "Purchase Order"
+    with pytest.raises(ErpError, match="references Purchase Order ACC-PINV-2, not only"):
+        _erp(fake).get_payment(pay)
+
+
+def test_invoice_and_debit_note_never_update_stock_or_pay_at_entry(fake):
+    fake.mapped["make_purchase_invoice"] = {
+        "doctype": "Purchase Invoice", "supplier": SUP, "update_stock": 1, "is_paid": 1,
+        "posting_date": "2026-10-30",
+        "items": [_row("Purchase Invoice Item", "HVAC-SVC", 1, rate=640, purchase_order=PO)]}
+    _erp(fake).create_invoice(SUP, "X-1", date(2026, 10, 30),
+                              [InvoiceLine(PO, "HVAC-SVC", D(1), D(640))], "")
+    sent = _inserted(fake, PI_DT)
+    assert (sent["update_stock"], sent["is_paid"]) == (0, 0)
+    fake.mapped["make_debit_note"] = {**fake.mapped["make_purchase_invoice"], "is_return": 1,
+                                      "return_against": PI}
+    _erp(fake).create_debit_note(PI, [InvoiceLine(PO, "HVAC-SVC", D(1), D(640))], "")
+    sent = _inserted(fake, PI_DT)
+    assert (sent["update_stock"], sent["is_paid"], sent["is_return"]) == (0, 0, 1)
+
+
+def test_onboarded_on_only_for_suppliers_onboarded_through_erp_guard(fake, erp):
+    fake.add({"doctype": "Supplier", "name": "OLD CO", "supplier_name": "OLD CO",
+              "creation": "2026-10-31 09:00:00"})
+    fake.add({"doctype": "Supplier", "name": "NEW CO", "supplier_name": "NEW CO",
+              "creation": "2026-10-31 09:00:00", "erp_guard_onboarded_by": REQ})
+    ext = _erp(fake)
+    assert ext.get_supplier("OLD CO").onboarded_on is None
+    assert ext.get_supplier("NEW CO").onboarded_on == date(2026, 10, 31)
+    from conftest import TODAY
+    assert erp.get_supplier("SUP-HERC").onboarded_on is None
+    assert erp.create_supplier("NEW CO", None, "", REQ).onboarded_on == TODAY
+
+
+def test_change_request_target_save_fails_request_stays_pending(fake, erp):
+    ext = _erp(fake)
+    fake.add({"doctype": "Supplier", "name": SUP, "supplier_name": SUP, "on_hold": 0})
+    cr = ext.create_change_request("Supplier", SUP, {"on_hold": 1})
+    orig = fake._method
+
+    def failing_save(method, req, body):
+        if method == "frappe.client.save":
+            import httpx
+            return httpx.Response(417, json={"exception": "ValidationError: no"})
+        return orig(method, req, body)
+    fake._method = failing_save
+    with pytest.raises(ErpError, match="417"):
+        ext.apply_change_request(cr, approve=True)
+    doc = fake.docs[("ERP Guard Change Request", cr)]
+    assert (doc["workflow_state"], doc.get("status"), doc.get("decided_by")) == (
+        "Pending Approval", None, None)
+    assert APPROVE not in [c["action"] for c in fake.method_calls(
+        "frappe.model.workflow.apply_workflow")]
+    # memory: the same order, the same outcome
+    mcr = erp.create_change_request("Supplier", "SUP-HERC", {"on_hold": 1})
+    del erp.suppliers["SUP-HERC"]
+    with pytest.raises(ErpError, match="No Supplier SUP-HERC"):
+        erp.apply_change_request(mcr, approve=True)
+    assert erp.change_requests[mcr]["state"] == DocState.PENDING
+
+
+def test_memory_refuses_what_erpnext_refuses(erp):
+    from conftest import TODAY
+    with pytest.raises(ErpError, match="at least one line"):
+        erp.create_invoice("SUP-CANON", "E-1", TODAY, [], "")
+    with pytest.raises(ErpError, match="at least one invoice"):
+        erp.create_payment("SUP-CANON", [], BANK)
+    inv = erp.create_invoice("SUP-CANON", "E-2", TODAY,
+                             [InvoiceLine("PO-HIST1", "TONER-K", D(1), D(90))], "")
+    with pytest.raises(ErpError, match=r"bank details are never written: \['paid_from'\]"):
+        erp.create_payment("SUP-CANON", [Allocation(inv.id, D(1))], "Petty Cash - LDU")
+    req = erp.create_request("IT", [RequestLine("LAPTOP-14", D(1))], "")
+    rfq = erp.create_rfq(req.id, ["SUP-CANON"])
+    with pytest.raises(ErpError, match=f"Not on {rfq}: TONER-K"):
+        erp.create_quote("SUP-CANON", [Line("TONER-K", D(1), D(80))], rfq, TODAY)
+    with pytest.raises(ErpError, match="bank details are never written"):
+        erp.create_change_request("Supplier", "SUP-HERC", {"default_bank_account": "x"})

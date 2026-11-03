@@ -6,10 +6,12 @@ import dataclasses
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from erp_guard.connectors.base import ErpError
+from erp_guard.checks import BANK_KEY
+from erp_guard.connectors.base import ErpError, check_editable
 from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 from erp_guard.packs.p2p import APPROVE, REJECT, REVISE, SUBMIT_FOR_APPROVAL, WITHDRAW
 from erp_guard.packs.p2p.models import (
+    EDITABLE,
     OPEN,
     POSTED,
     DocState,
@@ -37,21 +39,20 @@ _TRANSITIONS = {
     REVISE: ({DocState.REJECTED}, DocState.DRAFT),
     WITHDRAW: ({DocState.PENDING}, DocState.DRAFT),
 }
-# update_draft: the row fields each document type's lines carry, by ERPNext field name.
-_ROW_FIELDS = {"Purchase Invoice": ("items", {"qty", "rate"}),
-               "Purchase Order": ("items", {"qty", "rate"}),
-               "Supplier Quotation": ("items", {"qty", "rate"}),
-               "Purchase Receipt": ("items", {"qty"}),
-               "Material Request": ("items", {"qty"}),
-               "Payment Entry": ("references", {"allocated_amount"})}
 
 
 class MemoryErp:
     name = "memory"
 
-    def __init__(self, user: str = "requester@example.com", today: date | None = None):
+    def __init__(self, user: str = "requester@example.com", today: date | None = None,
+                 bank_account: str | None = None):
         self.user = user
         self.today = today or date.today()
+        # The one account payments may be made from (ERPNext's client enforces the same).
+        if bank_account is None:
+            from erp_guard.policy import load_policy
+            bank_account = load_policy().payment.bank_account
+        self.bank_account = bank_account
         self.suppliers: dict[str, Supplier] = {}
         self.orders: dict[str, PurchaseOrder] = {}
         self.cost_centres: dict[str, CostCentre] = {}
@@ -263,7 +264,11 @@ class MemoryErp:
 
     def create_quote(self, supplier_id, lines, rfq, quoted_on):
         if rfq is not None:
-            self._get("Request for Quotation", rfq)
+            req = self._get("Material Request", self._get("Request for Quotation", rfq)["request"])
+            asked = {ln.item_code for ln in req.lines}
+            missing = [ln.item_code for ln in lines if ln.item_code not in asked]
+            if missing:
+                raise ErpError(f"Not on {rfq}: " + "; ".join(missing))
         q = Quote(self._next("SQ"), supplier_id, rfq, DocState.DRAFT, tuple(lines), quoted_on)
         self.quotes[q.id] = q
         return q
@@ -298,6 +303,8 @@ class MemoryErp:
                 self._get("Purchase Receipt", ln.receipt)
 
     def create_invoice(self, supplier_id, bill_no, bill_date, lines, remarks):
+        if not lines:
+            raise ErpError("An invoice needs at least one line")
         self._check_invoice_lines(lines)
         inv = Invoice(self._next("PI"), supplier_id, bill_no, bill_date, self.user,
                       DocState.DRAFT, tuple(lines), remarks=remarks)
@@ -322,6 +329,10 @@ class MemoryErp:
         return note
 
     def create_payment(self, supplier_id, allocations, paid_from):
+        if not allocations:
+            raise ErpError("A payment pays at least one invoice")
+        if paid_from != self.bank_account:
+            raise ErpError("bank details are never written: ['paid_from']")
         for a in allocations:
             self._get("Purchase Invoice", a.invoice)
         p = Payment(self._next("PE"), supplier_id, self.user, DocState.DRAFT, self.today,
@@ -366,22 +377,21 @@ class MemoryErp:
         self._keep(doctype, id, reason=reason)
 
     def update_draft(self, doctype, id, fields):
-        """Header fields the model carries are set on it, others kept aside; rows merge in
-        order into the document's lines, which carry only the fields in _ROW_FIELDS."""
+        """Only the fields models.EDITABLE allows; rows merge in order into the document's
+        lines. A payment's remarks aren't on the model and are kept aside."""
+        check_editable(doctype, fields)
         if self._state(doctype, id) not in OPEN:
             raise ErpError(f"{doctype} {id} isn't a draft")
         doc = self._get(doctype, id)
         fields = dict(fields)
-        table, allowed = _ROW_FIELDS.get(doctype, (None, set()))
         changes: dict = {}
-        if table in fields:
+        for table in EDITABLE[doctype][1]:
+            if table not in fields:
+                continue
             rows = fields.pop(table)
             lines = doc.allocations if doctype == "Payment Entry" else doc.lines
             if len(rows) != len(lines):
                 raise ErpError(f"{table}: {len(rows)} rows given, the draft has {len(lines)}")
-            bad = sorted({k for r in rows for k in r} - allowed)
-            if bad:
-                raise ErpError(f"{doctype} rows: {', '.join(bad)} isn't modelled here")
             new = []
             for ln, row in zip(lines, rows, strict=True):
                 upd = {("amount" if k == "allocated_amount" else k): Decimal(str(v))
@@ -405,6 +415,9 @@ class MemoryErp:
         return self._replace(po, closed=True)
 
     def create_change_request(self, target_doctype, target_name, fields):
+        bank = sorted(k for k in fields if BANK_KEY.search(k))
+        if bank:
+            raise ErpError(f"bank details are never written: {bank}")
         if target_doctype == "Item" and target_name not in self.items or \
                 target_doctype == "Supplier" and target_name not in self.suppliers:
             raise ErpError(f"No {target_doctype} {target_name}")
@@ -416,6 +429,8 @@ class MemoryErp:
         return cid
 
     def apply_change_request(self, id, approve):
+        """As ERPNext: the change is applied first, and only then is the request approved;
+        if applying fails, the request stays pending."""
         rec = self._get("ERP Guard Change Request", id)
         if rec["state"] != DocState.PENDING:
             raise ErpError(f"Change request {id} isn't pending ({rec['state'].value})")
@@ -426,6 +441,9 @@ class MemoryErp:
 
     def _apply_master(self, doctype: str, name: str, fields: dict) -> None:
         fields = dict(fields)
+        if doctype == "Supplier" and name not in self.suppliers or \
+                doctype == "Item" and name not in self.items:
+            raise ErpError(f"No {doctype} {name}")
         if doctype == "Supplier":
             s, ch = self.suppliers[name], {}
             for src, dst, conv in (("supplier_name", "name", str), ("tax_id", "tax_id", str),

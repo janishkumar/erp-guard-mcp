@@ -27,6 +27,7 @@ RCV = "receiver@example.com"
 AP = "ap@example.com"
 CTL = "controller@example.com"
 TRS = "treasury@example.com"
+BANK = "Demo Operating Bank - LDU"
 PO = "PO-HIST1"  # approved: 10 x LAPTOP-14 @ 1200, 20 x TONER-K @ 90, SUP-CANON
 D = Decimal
 PI, PE = "Purchase Invoice", "Payment Entry"
@@ -81,9 +82,9 @@ def test_invoice_draft_then_approved_is_owed(erp):
 def test_payment_allocation_reduces_outstanding(erp):
     inv = _approved_invoice(erp)
     pay = erp.as_user(TRS).create_payment("SUP-CANON", [Allocation(inv.id, D(1000))],
-                                          "Demo Operating Bank - LDU")
+                                          BANK)
     assert (pay.state, pay.payer, pay.amount, pay.paid_from) == (
-        DocState.DRAFT, TRS, D(1000), "Demo Operating Bank - LDU")
+        DocState.DRAFT, TRS, D(1000), BANK)
     assert erp.outstanding(inv.id) == D(4800)  # a draft payment pays nothing yet
     erp.as_user(TRS).workflow(PE, pay.id, SUBMIT_FOR_APPROVAL)
     erp.as_user(MGR).workflow(PE, pay.id, APPROVE)
@@ -129,7 +130,8 @@ def test_as_user_shares_state(erp):
     assert (rcv.whoami(), ap.whoami()) == (RCV, AP)
     assert inv.lines[0].receipt == r.id
     # ids keep counting across views
-    assert ap.create_invoice("SUP-CANON", "B-8", TODAY, [], "").id != inv.id
+    assert ap.create_invoice("SUP-CANON", "B-8", TODAY,
+                             [InvoiceLine(PO, "TONER-K", D(1), D(90))], "").id != inv.id
 
 
 def test_workflow_transitions(erp):
@@ -192,7 +194,8 @@ def test_request_rfq_and_quotes(erp):
 
 
 def test_submit_doc_refuses_workflow_types(erp):
-    inv = erp.create_invoice("SUP-CANON", "S-1", TODAY, [], "")
+    inv = erp.create_invoice("SUP-CANON", "S-1", TODAY,
+                             [InvoiceLine(PO, "TONER-K", D(1), D(90))], "")
     with pytest.raises(ErpError, match="workflow"):
         erp.submit_doc(PI, inv.id)
     with pytest.raises(ErpError, match="No Supplier Quotation"):
@@ -205,7 +208,8 @@ def test_cancel_doc(erp):
     assert erp.get_receipt(r.id).state == DocState.CANCELLED
     with pytest.raises(ErpError, match="already cancelled"):
         erp.cancel_doc("Purchase Receipt", r.id, "again")
-    draft = erp.create_invoice("SUP-CANON", "C-1", TODAY, [], "")
+    draft = erp.create_invoice("SUP-CANON", "C-1", TODAY,
+                               [InvoiceLine(PO, "TONER-K", D(1), D(90))], "")
     with pytest.raises(ErpError, match="submitted"):
         erp.cancel_doc(PI, draft.id, "a draft isn't cancelled")  # as in ERPNext
     erp.cancel_doc("Purchase Order", PO, "orders: as cancel_order")
@@ -223,13 +227,13 @@ def test_update_draft(erp):
     assert [(ln.qty, ln.rate) for ln in got.lines] == [(D(3), D(1200)), (D(2), D(85))]
     with pytest.raises(ErpError, match="rows"):
         erp.update_draft(PI, inv.id, {"items": [{"qty": 1}]})
-    with pytest.raises(ErpError, match="is_stock_item"):
+    with pytest.raises(ErpError, match=r"can't have these changed: items\[\].is_stock_item"):
         erp.update_draft(PI, inv.id, {"items": [{"is_stock_item": 0}, {}]})
     erp.workflow(PI, inv.id, SUBMIT_FOR_APPROVAL)
     erp.as_user(CTL).workflow(PI, inv.id, APPROVE)
     with pytest.raises(ErpError, match="draft"):
         erp.update_draft(PI, inv.id, {"remarks": "too late"})
-    pay = erp.as_user(TRS).create_payment("SUP-CANON", [Allocation(inv.id, D(100))], "B")
+    pay = erp.as_user(TRS).create_payment("SUP-CANON", [Allocation(inv.id, D(100))], BANK)
     erp.update_draft(PE, pay.id, {"references": [{"allocated_amount": 250}],
                                   "remarks": "kept aside"})
     assert erp.get_payment(pay.id).amount == D(250)

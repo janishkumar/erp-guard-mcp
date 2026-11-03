@@ -35,6 +35,37 @@ POSTED = frozenset({DocState.APPROVED, DocState.SUBMITTED})
 OPEN = frozenset({DocState.DRAFT, DocState.PENDING, DocState.REJECTED})
 
 
+# What a draft may have changed (update_draft), by ERPNext field name: header fields, and
+# per child table the row fields. Everything else is refused by every connector: amounts,
+# parties, stock and payment flags are set only by the builders the checks ran against.
+# ERPNext's Material Request has no notes field, so only its quantities change.
+EDITABLE: dict[str, tuple[frozenset[str], dict[str, frozenset[str]]]] = {
+    "Purchase Invoice": (frozenset({"bill_no", "bill_date", "remarks"}),
+                         {"items": frozenset({"qty", "rate"})}),
+    "Payment Entry": (frozenset({"remarks"}),
+                      {"references": frozenset({"allocated_amount"})}),
+    "Material Request": (frozenset(), {"items": frozenset({"qty"})}),
+    "Supplier Quotation": (frozenset(), {"items": frozenset({"qty", "rate"})}),
+}
+
+
+def not_editable(doctype: str, fields: dict) -> list[str]:
+    """The fields of `fields` (rows as table[].field) that EDITABLE doesn't allow."""
+    if doctype not in EDITABLE:
+        return sorted(fields) or ["(any field)"]
+    header, tables = EDITABLE[doctype]
+    bad = []
+    for k, v in fields.items():
+        if k in tables:
+            if not isinstance(v, list) or not all(isinstance(r, dict) for r in v):
+                bad.append(f"{k}[]")
+                continue
+            bad += [f"{k}[].{f}" for f in sorted({f for r in v for f in r} - tables[k])]
+        elif k not in header:
+            bad.append(k)
+    return sorted(set(bad))
+
+
 @dataclass(frozen=True)
 class ItemInfo:
     code: str

@@ -19,7 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from erp_guard.checks import BANK_KEY as _BANK_KEY
-from erp_guard.connectors.base import ErpError
+from erp_guard.connectors.base import ErpError, check_editable
 from erp_guard.models import AuditRecord, CostCentre, Line, PurchaseOrder, Status, Supplier
 from erp_guard.packs.p2p import APPROVE, REJECT, REVISE, SUBMIT_FOR_APPROVAL, WITHDRAW
 from erp_guard.packs.p2p.models import (
@@ -405,12 +405,18 @@ def _invoice(d: dict, rows: list[dict]) -> Invoice:
 
 
 def _payment(d: dict, rows: list[dict]) -> Payment:
-    # References to anything but an invoice (an order, for an advance) aren't allocations.
+    # Payments reference supplier invoices only, so the allocations (plus anything
+    # unallocated) are the whole paid amount. A reference to anything else (an order, for an
+    # advance) is refused rather than left out.
+    other = [f"{r.get('reference_doctype')} {r.get('reference_name')}" for r in rows
+             if r.get("reference_doctype") != "Purchase Invoice"]
+    if other:
+        raise ErpError(f"Payment Entry {d['name']} references {', '.join(other)}, not only "
+                       "supplier invoices")
     return Payment(
         d["name"], d.get("party") or "", d["owner"], _doc_state(d, True),
         _date(d["posting_date"]), d.get("paid_from") or "",
-        tuple(Allocation(r["reference_name"], _dec(r["allocated_amount"])) for r in rows
-              if r.get("reference_doctype") == "Purchase Invoice"),
+        tuple(Allocation(r["reference_name"], _dec(r["allocated_amount"])) for r in rows),
         approver=d.get("erp_guard_approver") or None,
         unallocated=_dec(d.get("unallocated_amount")))
 
@@ -617,7 +623,10 @@ class ErpNext:
         return Supplier(d["name"], d.get("supplier_name") or d["name"], d.get("tax_id") or None,
                         bool(d.get("disabled")), bool(d.get("on_hold")),
                         d.get("erp_guard_onboarded_by") or None, d.get("erp_guard_notes") or "",
-                        _date(d["creation"]) if d.get("creation") else None)
+                        # Onboarded through erp-guard: since its creation. Master data that
+                        # predates erp-guard has no onboarding date.
+                        _date(d["creation"]) if d.get("erp_guard_onboarded_by")
+                        and d.get("creation") else None)
 
     def list_suppliers(self) -> list[Supplier]:
         return [self._supplier(d) for d in self.c.get_list("Supplier", _SUPPLIER_FIELDS)]
@@ -965,7 +974,8 @@ class ErpNext:
             rows += _keep_rows(draft.get("items") or [], wanted, key, name)
             doc = doc or draft
         doc.update(items=rows, supplier=supplier_id, bill_no=bill_no,
-                   bill_date=bill_date.isoformat(), remarks=remarks, ignore_pricing_rule=1)
+                   bill_date=bill_date.isoformat(), remarks=remarks, ignore_pricing_rule=1,
+                   update_stock=0, is_paid=0)
         return self._parse("Purchase Invoice", self.insert(doc))
 
     def set_invoice_hold(self, id, hold, comment):
@@ -992,7 +1002,8 @@ class ErpNext:
         draft["items"] = _keep_rows(draft.get("items") or [], wanted,
                                     lambda r: (r.get("purchase_order"), r["item_code"]),
                                     invoice_id)
-        draft.update(remarks=remarks, update_outstanding_for_self=0, ignore_pricing_rule=1)
+        draft.update(remarks=remarks, update_outstanding_for_self=0, ignore_pricing_rule=1,
+                     update_stock=0, is_paid=0)
         return self._parse("Purchase Invoice", self.insert(draft))
 
     def create_payment(self, supplier_id, allocations, paid_from):
@@ -1049,6 +1060,9 @@ class ErpNext:
         self.cancel(doctype, id)
 
     def update_draft(self, doctype, id, fields):
+        """Only the fields models.EDITABLE allows. Changed payment allocations also set the
+        paid amount to their sum, as create_payment does."""
+        check_editable(doctype, fields)
         d = self._require(doctype, id)
         if d.get("docstatus") != 0:
             raise ErpError(f"{doctype} {id} isn't a draft")
@@ -1061,6 +1075,10 @@ class ErpNext:
                 doc[k] = [{**r, **p} for r, p in zip(have, v, strict=True)]
             else:
                 doc[k] = v
+        if doctype == "Payment Entry" and "references" in fields:
+            total = float(sum((_dec(r["allocated_amount"]) for r in doc["references"]),
+                              Decimal(0)))
+            doc.update(paid_amount=total, received_amount=total)
         self.save(doc)
 
     def close_order(self, po, reason):
@@ -1084,15 +1102,16 @@ class ErpNext:
         return doc["name"]
 
     def apply_change_request(self, id, approve):
-        """Approve: the workflow approves (submits) the request, the change is saved on the
-        target document, and the request is marked Applied. Reject: the workflow rejects it
-        and it is marked Rejected. Either way it records who decided."""
+        """Approve: the change is saved on the target document first; only then does the
+        workflow approve (submit) the request, which is marked Applied. If the target can't
+        be saved, the request stays pending and the error is raised. Reject: the workflow
+        rejects it and it is marked Rejected. Either way it records who decided."""
         cr = self._require(CHANGE_REQUEST, id)
         if (cr.get("docstatus"), cr.get("workflow_state")) != (0, "Pending Approval"):
             raise ErpError(f"Change request {id} isn't pending")
-        self.apply_workflow(CHANGE_REQUEST, id, APPROVE if approve else REJECT)
         if approve:
             target = self._require(cr["target_doctype"], cr["target_name"])
             self.save({**target, **json.loads(cr["fields_json"])})
+        self.apply_workflow(CHANGE_REQUEST, id, APPROVE if approve else REJECT)
         self.c.request("PUT", _res(CHANGE_REQUEST, id), body={
             "status": "Applied" if approve else "Rejected", "decided_by": self.whoami()})

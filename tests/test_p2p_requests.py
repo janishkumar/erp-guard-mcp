@@ -17,7 +17,7 @@ from fake_erpnext import FakeErpNext, connector
 from erp_guard import render
 from erp_guard.checks import BLOCK, PASS, WARN
 from erp_guard.connectors.memory import line
-from erp_guard.models import PurchaseOrder, Status
+from erp_guard.models import PurchaseOrder, Status, Supplier
 from erp_guard.ops import Op, Write
 from erp_guard.packs.p2p import APPROVE, REJECT, REVISE, SUBMIT_FOR_APPROVAL
 from erp_guard.packs.p2p import checks as P
@@ -166,18 +166,57 @@ def test_30k_three_quotes_ok(erp, svc):
 def test_quotes_must_cover_every_item_and_include_the_supplier(erp, svc):
     rid = approved_request(erp, qty=30)
     args = po_args(qty=30, rate=1000, request=rid)
-    quoted(erp, suppliers=("SUP-CANON", "SUP-MGR", "SUP-HOLD"))
+    erp.add_supplier(Supplier("SUP-ACME", "ACME SALT LLC"))
+    quoted(erp, suppliers=("SUP-CANON", "SUP-MGR", "SUP-ACME"))
     res = svc.preview("create_purchase_order", args).checks
     assert _level(res, "competitive quotes") == [BLOCK]
     assert "SUP-HERC" in _checks(res, "competitive quotes")[0].message  # it didn't quote
     # Draft quotes and quotes for other items don't count.
     erp.quotes["SQ-D"] = Quote("SQ-D", "SUP-HERC", None, DocState.DRAFT,
-                               (line("SALT-TON", 1, 900),), TODAY)
+                               (line("SALT-TON", 1, 1000),), TODAY)
     erp.quotes["SQ-T"] = Quote("SQ-T", "SUP-HERC", None, DocState.SUBMITTED,
                                (line("TONER-K", 1, 80),), TODAY)
     assert svc.preview("create_purchase_order", args).blocked
     erp.quotes["SQ-D"] = replace(erp.quotes["SQ-D"], state=DocState.SUBMITTED)
     assert not svc.preview("create_purchase_order", args).blocked
+
+
+def test_unusable_or_requester_onboarded_competitors_dont_count(erp, svc):
+    """Ruling 28: a quote counts only from a supplier usable now and not onboarded by the
+    order's requester (who could otherwise make up the competition)."""
+    rid = approved_request(erp, qty=30)
+    args = po_args(qty=30, rate=1000, request=rid)
+    erp.add_supplier(Supplier("SUP-OFF", "DORMANT SALT CO", disabled=True))
+    erp.add_supplier(Supplier("SUP-MINE", "MY COUSIN SALT LLC", onboarded_by=REQ))
+    quoted(erp, suppliers=("SUP-HERC", "SUP-CANON", "SUP-OFF", "SUP-MINE"))
+    res = svc.preview("create_purchase_order", args).checks
+    msg = _checks(res, "competitive quotes")[0].message
+    assert _level(res, "competitive quotes") == [BLOCK] and "Found 2" in msg
+    assert "SUP-OFF (not usable)" in msg and f"SUP-MINE (onboarded by {REQ})" in msg
+    # Onboarded by someone else, the same supplier counts.
+    erp.add_supplier(replace(erp.get_supplier("SUP-MINE"), onboarded_by=REQ2))
+    assert not svc.preview("create_purchase_order", args).blocked
+    # And a supplier put on hold since quoting stops counting.
+    erp.add_supplier(replace(erp.get_supplier("SUP-CANON"), on_hold=True))
+    assert _level(svc.preview("create_purchase_order", args).checks,
+                  "competitive quotes") == [BLOCK]
+
+
+def test_competed_order_is_capped_at_its_suppliers_quote(erp, svc):
+    """Ruling 28: an order that needed competing quotes can't be priced above its own
+    supplier's quote, linked or not."""
+    rid = approved_request(erp, qty=30)
+    quoted(erp, rate=900, suppliers=("SUP-HERC",))
+    quoted(erp, rate=1200, suppliers=("SUP-CANON", "SUP-MGR"))
+    res = svc.preview("create_purchase_order", po_args(qty=30, rate=1000, request=rid)).checks
+    assert _level(res, "competitive quotes") == [PASS]
+    assert _level(res, "quote price") == [BLOCK] and "900" in _checks(res, "quote price")[0] \
+        .message
+    assert not svc.preview("create_purchase_order",
+                           po_args(qty=30, rate=900, request=rid)).blocked
+    # Under the quote threshold the supplier's quotes don't cap anything.
+    small = svc.preview("create_purchase_order", po_args(qty=5, rate=1000, request=rid))
+    assert _level(small.checks, "quote price") == [PASS] and not small.blocked
 
 
 def test_sole_source_manager_blocked(erp, svc, policy):
@@ -474,6 +513,112 @@ def test_sole_source_reason_is_free_text_checked(svc, erp):
     assert _level(p.checks, "no_bank_details") == [BLOCK]
 
 
+# --- draft edits and cancellation (Ruling 27) -------------------------------------------
+
+def _upd(erp, policy, user, doctype, ref, rows):
+    svc = as_user(erp, policy, user)
+    pack = svc.pack_for(doctype)
+    w = Write(Op.UPDATE, doctype, ref, fields={"items": rows})
+    return svc, pack, w, pack.evaluate_write(svc, w)[1]
+
+
+def _cancel(erp, policy, user, doctype, ref, reason="no longer needed"):
+    return _write(erp, policy, user, Op.CANCEL, doctype, ref, reason=reason)
+
+
+def test_update_draft_request(erp, policy):
+    rid = _raised(erp, policy)
+    assert _level(_upd(erp, policy, REQ2, MR, rid, [{"qty": 7}])[3], "edit after entry") \
+        == [BLOCK]  # only who raised it
+    for rows, why in (([{"rate": 9}], "items[].rate"), ([{"qty": 1}, {"qty": 2}], "2 rows"),
+                      ([{"qty": 0}], "more than zero")):
+        res = _upd(erp, policy, REQ, MR, rid, rows)[3]
+        assert any(why in m for m in _blocks(res)), (why, _blocks(res))
+    svc, pack, w, res = _upd(erp, policy, REQ, MR, rid, [{"qty": 7}])
+    assert not _blocks(res) and {"cost centre", "items_known"} <= {r.check for r in res}
+    pack.apply_write(svc, w)
+    assert erp.get_request(rid).lines == (RequestLine("SALT-TON", D(7)),)
+    _step(erp, policy, REQ, Op.WORKFLOW, MR, rid, SUBMIT_FOR_APPROVAL)
+    res = _upd(erp, policy, REQ, MR, rid, [{"qty": 8}])[3]
+    assert "Pending Approval; only drafts" in _blocks(res)[0]
+
+
+def test_update_draft_quote_reruns_its_checks(erp, policy):
+    svc = as_user(erp, policy, REQ)
+    q = run(svc, "enter_supplier_quote", _quote_args(rate=950))
+    svc, pack, w, res = _upd(erp, policy, REQ, SQ, q, [{"rate": 900, "qty": 20}])
+    assert not _blocks(res), _blocks(res)
+    pack.apply_write(svc, w)
+    assert erp.get_quote(q).lines == (line("SALT-TON", 20, 900),)
+    rfq = _rfq(erp, policy)[1]  # a request for quotation has nothing to edit
+    res = _write(erp, policy, REQ, Op.UPDATE, RFQ, rfq)[3]
+    assert _level(res, "pack") == [BLOCK] and "not supported" in res[0].message
+    erp.add_supplier(replace(erp.get_supplier("SUP-HERC"), on_hold=True))
+    res = _upd(erp, policy, REQ, SQ, q, [{"rate": 880}])[3]
+    assert _level(res, "supplier_usable") == [BLOCK]
+
+
+def test_cancel_request_blocked_while_an_order_uses_it(erp, policy):
+    svc = as_user(erp, policy, REQ)
+    draft = _raised(erp, policy)
+    assert "a draft counts for nothing" in _blocks(_cancel(erp, policy, REQ, MR, draft)[3])[0]
+    rid = _approved(erp, policy, (("SALT-TON", 8),))
+    po = run(svc, "create_purchase_order", po_args(qty=8, rate=1000, request=rid))
+    res = _cancel(erp, policy, REQ, MR, rid)[3]
+    assert any(f"Live orders are made from {rid} ({po})" in m for m in _blocks(res))
+    assert any("reason is required" in m for m in _blocks(_cancel(erp, policy, REQ, MR, rid,
+                                                                   "")[3]))
+    assert any("purchase approver" in m for m in _blocks(_cancel(erp, policy, REQ2, MR, rid)[3]))
+    res = _cancel(erp, policy, MGR, MR, rid, "Wire to IBAN GB29 NWBK 6016 1331 9268 19")[3]
+    assert _level(res, "no_bank_details") == [BLOCK]
+    run(svc, "cancel_purchase_order", {"po": po, "reason": "not needed"})
+    _step(erp, policy, MGR, Op.CANCEL, MR, rid, reason="budget cut")  # an approver may
+    assert erp.get_request(rid).state == DocState.CANCELLED
+    assert any("Cancelled" in m for m in _blocks(_cancel(erp, policy, REQ, MR, rid)[3]))
+
+
+def test_cancel_quote_and_rfq(erp, policy):
+    rid, rfq = _rfq(erp, policy)
+    svc = as_user(erp, policy, REQ)
+    q = run(svc, "enter_supplier_quote", _quote_args(rfq=rfq))
+    _step(erp, policy, REQ, Op.SUBMIT, SQ, q)
+    assert any(f"Submitted quotations answer {rfq} ({q})" in m
+               for m in _blocks(_cancel(erp, policy, REQ, RFQ, rfq)[3]))
+    po = run(svc, "create_purchase_order", po_args(qty=4, rate=950, quotations=[q]))
+    assert any(f"({po})" in m for m in _blocks(_cancel(erp, policy, REQ, SQ, q)[3]))
+    assert any("Only" in m for m in _blocks(_cancel(erp, policy, REQ2, SQ, q)[3]))
+    run(svc, "cancel_purchase_order", {"po": po, "reason": "wrong item"})
+    _step(erp, policy, REQ, Op.CANCEL, SQ, q, reason="superseded")
+    assert erp.get_quote(q).state == DocState.CANCELLED
+    _step(erp, policy, REQ, Op.CANCEL, RFQ, rfq, reason="done")
+    assert erp.get_rfq(rfq).state == DocState.CANCELLED
+
+
+def test_update_and_cancel_through_the_fake_erpnext(policy):
+    fake = FakeErpNext(REQ)
+    fake.workflows.add(MR)
+    svc = Service(connector(fake), policy, today=lambda: TODAY)
+    for name, docstatus, state in (("MAT-MR-1", 0, "Draft"), ("MAT-MR-2", 1, "Approved")):
+        fake.add({"doctype": MR, "name": name, "owner": REQ, "docstatus": docstatus,
+                  "workflow_state": state, "transaction_date": TODAY.isoformat(),
+                  "items": [{"item_code": "LAPTOP-14", "qty": 5, "cost_center": "IT - LDU"}]})
+    fake.add({"doctype": "Item", "name": "LAPTOP-14", "last_purchase_rate": 1200})
+    fake.add({"doctype": "Cost Center", "name": "IT - LDU", "erp_guard_annual_budget": 1})
+    upd = {"doctype": MR, "name": "MAT-MR-1", "fields": {"items": [{"qty": 6}]}}
+    p = svc.preview("update_document", upd)
+    assert not p.blocked, _blocks(p.checks)
+    assert svc.execute("update_document", upd, p.code).outcome == "written"
+    assert fake.docs[(MR, "MAT-MR-1")]["items"][0]["qty"] == 6
+    bad = {**upd, "fields": {"items": [{"qty": 6, "item_code": "TONER-K"}]}}
+    assert "items[].item_code" in " ".join(_blocks(svc.preview("update_document", bad).checks))
+    cancel = {"doctype": MR, "name": "MAT-MR-2", "reason": "not needed"}
+    p = svc.preview("cancel_document", cancel)
+    assert not p.blocked, _blocks(p.checks)
+    assert svc.execute("cancel_document", cancel, p.code).outcome == "written"
+    assert fake.method_calls("frappe.client.cancel") == [{"doctype": MR, "name": "MAT-MR-2"}]
+    assert fake.docs[(MR, "MAT-MR-2")]["docstatus"] == 2
+
+
 # --- routing through the generic tools ---------------------------------------------------
 
 @pytest.mark.parametrize(("op", "doctype", "tool"), [
@@ -534,7 +679,9 @@ def test_erpnext_order_rows_come_from_the_mappers():
                 "make_purchase_order"] = {"doctype": "Purchase Order", "items": [
                     {"doctype": "Purchase Order Item", "item_code": "LAPTOP-14", "qty": 5,
                      "conversion_factor": 1, "supplier_quotation": "SQ-1",
-                     "supplier_quotation_item": "sqi-1", "discount_percentage": 5}]}
+                     "supplier_quotation_item": "sqi-1", "discount_percentage": 5,
+                     # The quote answered another request's RFQ, so ERPNext maps its link.
+                     "material_request": "MAT-MR-9", "material_request_item": "mri-9"}]}
     o = erp.create_order("SUP-A", "IT - LDU", [line("LAPTOP-14", 4, 1100)], "",
                          TODAY + timedelta(days=14), request="MAT-MR-1", quotations=["SQ-1"],
                          sole_source_reason="")
@@ -554,3 +701,10 @@ def test_erpnext_order_rows_come_from_the_mappers():
     with pytest.raises(Exception, match="Not on"):
         erp.create_order("SUP-A", "IT - LDU", [line("TONER-K", 1, 80)], "", TODAY,
                          request="MAT-MR-1")
+    # From the quotation alone, the order isn't linked to the request it was checked
+    # without (Ruling 28): what is written is what was checked.
+    o = erp.create_order("SUP-A", "IT - LDU", [line("LAPTOP-14", 4, 1100)], "", TODAY,
+                         quotations=["SQ-1"])
+    [row] = fake.docs[("Purchase Order", o.id)]["items"]
+    assert "material_request" not in row and "material_request_item" not in row
+    assert (row["supplier_quotation"], o.request, o.quotations) == ("SQ-1", None, ("SQ-1",))

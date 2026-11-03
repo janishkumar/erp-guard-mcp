@@ -12,7 +12,8 @@ invoice checks (packs.p2p.invoices); invoices and debit notes are entered by
 `enter_supplier_invoice` and `enter_debit_note`. A Payment Entry's workflow actions, draft
 edits and cancellation run the payment checks (packs.p2p.payments); payments are entered by
 `pay_supplier`. A Material Request's workflow actions run the purchase request checks, and
-submitting a Request for Quotation or a Supplier Quotation runs the quote checks
+submitting a Request for Quotation or a Supplier Quotation runs the quote checks, as do
+draft edits of requests and quotations and cancelling any of the three
 (packs.p2p.requests); they are raised by `raise_purchase_request`, `request_quotes` and
 `enter_supplier_quote`. Every other operation on a P2P-owned type is refused until its task
 tools land.
@@ -67,6 +68,11 @@ _DIRECT = {
     ("Request for Quotation", Op.SUBMIT): (requests.evaluate_submit_rfq,
                                            requests.apply_submit),
     ("Supplier Quotation", Op.SUBMIT): (requests.evaluate_submit_quote, requests.apply_submit),
+    ("Material Request", Op.UPDATE): (requests.evaluate_update, requests.apply_update),
+    ("Supplier Quotation", Op.UPDATE): (requests.evaluate_update, requests.apply_update),
+    ("Material Request", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
+    ("Request for Quotation", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
+    ("Supplier Quotation", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
 }
 # Unsupported operations whose step has a tool: the refusal names it.
 _INSTEAD = {

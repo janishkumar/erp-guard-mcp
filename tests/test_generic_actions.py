@@ -32,6 +32,9 @@ def fake():
            "workflow_state": "Approved", "company": "Lakeside Demo Utilities",
            "transaction_date": (TODAY - timedelta(days=5)).isoformat(),
            "items": [{"item_code": "SALT-TON", "qty": 2, "cost_center": FLEET}]})
+    for sup in ("MORTON SALT INC", "COMPASS MINERALS"):
+        f.add({"doctype": "Supplier", "name": sup, "supplier_name": sup, "disabled": 0,
+               "on_hold": 0})
     for i, sup in enumerate(("HERC RENTALS INC", "MORTON SALT INC", "COMPASS MINERALS")):
         f.add({"doctype": "Supplier Quotation", "name": f"SQ-{i + 1}", "docstatus": 1,
                "owner": REQ2, "supplier": sup, "company": "Lakeside Demo Utilities",

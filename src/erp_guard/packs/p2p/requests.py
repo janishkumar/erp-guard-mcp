@@ -1,7 +1,7 @@
 """Purchase requests and supplier quotes: raise_purchase_request, request_quotes and
-enter_supplier_quote, plus the request's workflow and the submission of requests for
-quotation and supplier quotations as the generic tools reach them (workflow_action,
-submit_document).
+enter_supplier_quote, plus the request's workflow, the submission of requests for
+quotation and supplier quotations, draft edits and cancellation as the generic tools reach
+them (workflow_action, submit_document, update_document, cancel_document).
 
 A purchase request (ERPNext: a Material Request of type Purchase) is raised as a draft,
 submitted for approval by the person who raised it, and approved through the Material
@@ -11,20 +11,34 @@ are made from an approved request (packs.p2p.orders). Quotes are asked for from 
 approved request with a request for quotation, and entered as supplier quotations; neither
 has an approval, so each is submitted directly, by the person who entered it. Orders of
 $25,000 or more need submitted quotes from three suppliers, or a sole-source reason.
+
+A draft request or quote is edited only by the person who entered it, and only its
+quantities (and a quote's rates); the checks it was entered with re-run. A submitted one
+is cancelled by the person who entered it or a purchase approver, with a reason, and not
+while a live order is made from it. A draft needs no voiding: it counts for nothing.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from erp_guard import checks as C
-from erp_guard.models import Line
+from erp_guard.models import LIVE_STATUSES, Line
 from erp_guard.ops import Write
 from erp_guard.packs.p2p import APPROVE, REJECT, REVISE, SUBMIT_FOR_APPROVAL
 from erp_guard.packs.p2p import checks as P
-from erp_guard.packs.p2p.models import DocState, Quote, Request, RequestLine, Rfq
+from erp_guard.packs.p2p.models import (
+    POSTED,
+    DocState,
+    Quote,
+    Request,
+    RequestLine,
+    Rfq,
+    not_editable,
+)
 from erp_guard.service import Action, InvalidArgs, _decimal, _text, canonicaliser
 
 if TYPE_CHECKING:
@@ -365,6 +379,126 @@ def evaluate_submit_quote(svc: Service, w: Write) -> Result:
 def apply_submit(svc: Service, w: Write) -> tuple[str, str]:
     svc.erp.submit_doc(w.doctype, w.name)
     return w.name, f"{w.doctype} {w.name} submitted."
+
+
+# --- edits to a draft (reached through update_document) --------------------------------
+
+_EDITABLE_TEXT = {REQUEST: "items[].qty", QUOTE: "items[].qty, items[].rate"}
+
+
+def _edited_lines(lines, fields: dict, keys: tuple[str, ...]) -> tuple[tuple | None, list]:
+    """The lines after the edit (rows merged in order), or what's wrong with it."""
+    rows = fields.get("items")
+    if rows is None:
+        return tuple(lines), []
+    if len(rows) != len(lines):
+        return None, [f"items: {len(rows)} rows given, the draft has {len(lines)}"]
+    out, problems = [], []
+    for i, (ln, row) in enumerate(zip(lines, rows, strict=True)):
+        try:
+            out.append(replace(ln, **{k: Decimal(_positive(row, k, i)) for k in keys
+                                      if k in row}))
+        except InvalidArgs as exc:
+            problems.append(str(exc))
+    return (tuple(out), []) if not problems else (None, problems)
+
+
+def evaluate_update(svc: Service, w: Write) -> Result:
+    ref, doctype, name = w.name, w.doctype, "edit after entry"
+    what = "purchase request" if doctype == REQUEST else "supplier quotation"
+    summary = f"Update {what} {ref}."
+    if (bad := _unsupported(svc)):
+        return summary, bad
+    doc = svc.erp.get_request(ref) if doctype == REQUEST else svc.erp.get_quote(ref)
+    if doc is None:
+        return summary, [_block(name, f"No {what} '{ref}'.")]
+    owner = doc.requester if doctype == REQUEST else doc.entered_by
+    res = []
+    if doc.state != DocState.DRAFT:
+        res.append(_block(name, f"{ref} is {doc.state.value}; only drafts are edited."))
+    if svc.actor != owner:
+        res.append(_block(name, f"Only {owner}, who entered {ref}, edits it."))
+    bad_fields = not_editable(doctype, w.fields)
+    if bad_fields:
+        res.append(_block(name, f"These can't be changed on a {what} draft: "
+                          f"{', '.join(bad_fields)}. Editable: {_EDITABLE_TEXT[doctype]}.",
+                          fields=bad_fields))
+        return summary, res
+    keys = ("qty",) if doctype == REQUEST else ("qty", "rate")
+    lines, problems = _edited_lines(doc.lines, w.fields, keys)
+    if problems:
+        return summary, res + [_block(name, "; ".join(problems) + ".")]
+    if not any(r.level == C.BLOCK for r in res):
+        res.append(_pass(name, f"{ref} is a draft entered by {svc.actor}."))
+    edited = replace(doc, lines=lines)
+    res += _request_checks(svc, edited) if doctype == REQUEST else _quote_checks(svc, edited)
+    tail = f"; {_estimate(svc, edited)}" if doctype == REQUEST else \
+        f"; total {P.usd(_quote_total(edited))}"
+    return f"Update draft {what} {ref}: {_describe(edited.lines)}{tail}.", res
+
+
+def apply_update(svc: Service, w: Write) -> tuple[str, str]:
+    fields = {"items": [{k: Decimal(str(v)) for k, v in row.items()}
+                        for row in w.fields.get("items", [])]}
+    svc.erp.update_draft(w.doctype, w.name, fields)
+    return w.name, f"Draft {w.doctype} {w.name} updated: {', '.join(sorted(w.fields))}."
+
+
+# --- cancellation (reached through cancel_document) ------------------------------------
+
+def _live_orders_from(svc: Service, doctype: str, doc) -> list[str]:
+    """Live orders made from this request or quotation."""
+    if doctype == REQUEST:
+        return sorted(o.id for o in svc.erp.list_orders(since=doc.created)
+                      if o.request == doc.id and o.status in LIVE_STATUSES)
+    return sorted(o.id for o in svc.erp.list_orders(since=doc.quoted_on)
+                  if doc.id in o.quotations and o.status in LIVE_STATUSES)
+
+
+def _quotes_answering(svc: Service, rfq: Rfq) -> list[str]:
+    req = svc.erp.get_request(rfq.request) if rfq.request else None
+    codes = sorted({ln.item_code for ln in req.lines}) if req else []
+    return sorted(q.id for q in svc.erp.list_quotes(item_codes=codes, since=date.min)
+                  if q.rfq == rfq.id and q.state in POSTED)
+
+
+def evaluate_cancel(svc: Service, w: Write) -> Result:
+    actor, ref, doctype, name = svc.actor, w.name, w.doctype, "cancel"
+    summary = f"Cancel {doctype} {ref}. Nothing is deleted; it stays on record as cancelled."
+    if (bad := _unsupported(svc)):
+        return summary, bad
+    erp = svc.erp
+    doc = (erp.get_request(ref) if doctype == REQUEST else
+           erp.get_rfq(ref) if doctype == RFQ else erp.get_quote(ref))
+    if doc is None:
+        return summary, [_block(name, f"No {doctype} '{ref}'.")]
+    owner = (doc.requester if doctype == REQUEST else
+             doc.created_by if doctype == RFQ else doc.entered_by)
+    res: list[C.CheckResult] = []
+    if doc.state not in POSTED:
+        res.append(_block(name, f"{ref} is {doc.state.value}; only a submitted one is "
+                          "cancelled (a draft counts for nothing, so needs no cancelling)."))
+    if actor != owner and svc.policy.approver_limit(actor) is None:
+        res.append(_block(name, f"Only {owner}, who entered {ref}, or a purchase approver "
+                          "cancels it."))
+    if not w.reason:
+        res.append(_block(name, "A reason is required."))
+    if doc.state in POSTED:
+        if doctype == RFQ:
+            if (quotes := _quotes_answering(svc, doc)):
+                res.append(_block(name, f"Submitted quotations answer {ref} "
+                                  f"({', '.join(quotes)}); cancel them first."))
+        elif (orders := _live_orders_from(svc, doctype, doc)):
+            res.append(_block(name, f"Live orders are made from {ref} "
+                              f"({', '.join(orders)}); cancel them first."))
+    if not any(r.level == C.BLOCK for r in res):
+        res.append(_pass(name, f"{ref} is {doc.state.value}; {actor} can cancel it."))
+    return summary, res + _free_text({"reason": w.reason})
+
+
+def apply_cancel(svc: Service, w: Write) -> tuple[str, str]:
+    svc.erp.cancel_doc(w.doctype, w.name, w.reason)
+    return w.name, f"{w.doctype} {w.name} cancelled. Reason: {w.reason}"
 
 
 # --- the actions -----------------------------------------------------------------------

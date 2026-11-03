@@ -738,7 +738,9 @@ class ErpNext:
         """The order's rows. A line made from supplier quotations or a purchase request is
         ERPNext's own row from its mapper (make_purchase_order), so it carries the links
         back (supplier_quotation and its row, material_request and its row), with the
-        line's quantity and rate and no discount. Each line's item must be on them."""
+        line's quantity and rate and no discount. Each line's item must be on them. An
+        order from quotations alone carries no request link, even if the quotation came
+        from a request's RFQ: what is written is what was checked."""
         plain = self._items(lines, cost_centre, schedule)
         if not request and not quotations:
             return plain
@@ -764,6 +766,9 @@ class ErpNext:
                 mr = requested[ln.item_code]
                 r.update(material_request=mr.get("material_request") or request,
                          material_request_item=mr.get("material_request_item"))
+            else:  # a quote answering a request's RFQ carries it; the order isn't from it
+                r.pop("material_request", None)
+                r.pop("material_request_item", None)
             r["stock_qty"] = float(ln.qty) * float(r.get("conversion_factor") or 1)
             rows.append(r)
         return rows

@@ -808,28 +808,50 @@ def request_authority(actor: str, request: Request, prices: dict[str, Decimal],
                        f"{actor}'s limit of {usd(limit)}.")
 
 
+def counted_quotes(order: PurchaseOrder, quotes: list[Quote], policy: Policy, today: date,
+                   suppliers: dict[str, Supplier | None]) -> tuple[list[Quote], list[str]]:
+    """The quotes that count as competition for an order: submitted, dated in the last
+    `lookback_days` and not after today, from a supplier that is usable now (in the
+    master, not disabled or on hold) and wasn't onboarded by the order's requester. Also
+    the suppliers left out, and why."""
+    since = today - timedelta(days=policy.quotes.lookback_days)
+    out, left_out = [], set()
+    for qt in quotes:
+        if qt.state != DocState.SUBMITTED or not since <= qt.quoted_on <= today:
+            continue
+        sup = suppliers.get(qt.supplier_id)
+        if sup is None or sup.disabled or sup.on_hold:
+            left_out.add(f"{qt.supplier_id} (not usable)")
+        elif sup.onboarded_by and sup.onboarded_by == order.requester:
+            left_out.add(f"{qt.supplier_id} (onboarded by {order.requester})")
+        else:
+            out.append(qt)
+    return out, sorted(left_out)
+
+
 def competitive_quotes(order: PurchaseOrder, quotes: list[Quote], policy: Policy,
-                       today: date) -> CheckResult:
+                       today: date, *, suppliers: dict[str, Supplier | None]) -> CheckResult:
     """An order of the quotes threshold or more: at least `count` suppliers, the order's
-    own among them, have submitted quotations in the last `lookback_days` that together
-    cover every item on it. Or the order gives a sole-source reason (approved from the
-    director tier up)."""
+    own among them, have quotations that count (counted_quotes) and together cover every
+    item on it. Or the order gives a sole-source reason (approved from the director tier
+    up)."""
     name, q = "competitive quotes", policy.quotes
     if order.total < q.threshold:
         return CheckResult(name, PASS, f"Under {usd(q.threshold)}: no competing quotes needed.")
     if order.sole_source_reason:
         return CheckResult(name, PASS, "Sole source: a reason is given instead of competing "
                            f"quotes, so a {SOLE_SOURCE_TIER} or above approves the order.")
-    since = today - timedelta(days=q.lookback_days)
+    counted, left_out = counted_quotes(order, quotes, policy, today, suppliers)
     items = {ln.item_code for ln in order.lines}
     covered: dict[str, set[str]] = defaultdict(set)
-    for qt in quotes:
-        if qt.state == DocState.SUBMITTED and since <= qt.quoted_on <= today:
-            covered[qt.supplier_id] |= {ln.item_code for ln in qt.lines}
+    for qt in counted:
+        covered[qt.supplier_id] |= {ln.item_code for ln in qt.lines}
     full = sorted(s for s, quoted in covered.items() if items <= quoted)
-    evidence = {"suppliers": full, "needed": q.count}
+    evidence = {"suppliers": full, "needed": q.count, "not_counted": left_out}
     if len(full) < q.count:
         found = f"Found {len(full)}" + (f": {', '.join(full)}" if full else "")
+        if left_out:
+            found += f" (not counted: {', '.join(left_out)})"
         return CheckResult(name, BLOCK, f"This order is {usd(order.total)}; orders of "
                            f"{usd(q.threshold)} or more need submitted supplier quotations "
                            f"for all their items from {q.count} different suppliers in the "
@@ -863,11 +885,15 @@ def sole_source_approver(actor: str, order: PurchaseOrder, policy: Policy) -> Ch
                        "above.")
 
 
-def quote_price(order: PurchaseOrder, quotes_by_id: dict[str, Quote | None]) -> CheckResult:
+def quote_price(order: PurchaseOrder, quotes_by_id: dict[str, Quote | None],
+                supplier_quotes: list[Quote] = ()) -> CheckResult:
     """An order made from supplier quotations: each is a submitted quotation of the order's
-    supplier, every item is on one, and no rate is above the lowest quoted for it."""
+    supplier, every item is on one, and no rate is above the lowest quoted for it. An order
+    that needed competing quotes (`supplier_quotes`: the order's supplier's quotes that
+    counted) is capped at the supplier's quoted rate the same way, linked or not."""
     name = "quote price"
-    if not order.quotations:
+    supplier_quotes = [qt for qt in supplier_quotes if qt.supplier_id == order.supplier_id]
+    if not order.quotations and not supplier_quotes:
         return CheckResult(name, PASS, "Not made from a supplier quotation.")
     problems = []
     rates: dict[str, list[Decimal]] = defaultdict(list)
@@ -883,11 +909,16 @@ def quote_price(order: PurchaseOrder, quotes_by_id: dict[str, Quote | None]) -> 
         else:
             for ln in qt.lines:
                 rates[ln.item_code].append(ln.rate)
+    for qt in supplier_quotes:
+        for ln in qt.lines:
+            rates[ln.item_code].append(ln.rate)
     if not problems:
         for ln in order.lines:
             quoted = rates.get(ln.item_code)
             if not quoted:
-                problems.append(f"{ln.item_code} isn't on {', '.join(order.quotations)}")
+                if order.quotations:
+                    problems.append(f"{ln.item_code} isn't on "
+                                    f"{', '.join(order.quotations)}")
             elif ln.rate > min(quoted):
                 problems.append(f"{ln.item_code} at {usd(ln.rate)} is above the quoted "
                                 f"{usd(min(quoted))}")

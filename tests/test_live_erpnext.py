@@ -937,6 +937,40 @@ def test_live_request_to_order(undo, created):
     assert req.erp.get_order(out.target).sole_source_reason == "live: only approved model"
     assert run(req, "submit_for_approval", {"po": out.target})[1].outcome == "written"
     assert "sole source" in blocked(mgr.preview("approve_purchase_order", {"po": out.target}))
+    # The request can't be cancelled while live orders are made from it (Ruling 27).
+    p = mgr.preview("cancel_document", {"doctype": "Material Request", "name": mr,
+                                        "reason": "live test"})
+    assert "cancel" in blocked(p) and mgr.erp.get_doc("Material Request", mr)["docstatus"] == 1
+
+
+def test_live_cancel_and_edit_request(undo):
+    """An approved request no order uses is cancelled by its requester through
+    cancel_document (ERPNext cancels it); a draft is edited through update_document by the
+    person who raised it, only its quantities, and a draft can't be cancelled."""
+    req, req2 = svc("REQUESTER"), svc("REQUESTER2")
+    blocked = lambda p: {c.check for c in p.checks if c.level == "block"}  # noqa: E731
+    p, out = run(req, "raise_purchase_request", {
+        "cost_centre": CC, "lines": [{"item_code": "PAPER-A4", "qty": 2}]})
+    assert out.outcome == "written", (out.message, blocked(p))
+    mr = out.target
+    undo.append((svc("MANAGER").erp, "Material Request", mr))
+    upd = {"doctype": "Material Request", "name": mr, "fields": {"items": [{"qty": 3}]}}
+    assert "edit after entry" in blocked(req2.preview("update_document", upd))
+    p, out = run(req, "update_document", upd)
+    assert out.outcome == "written", (out.message, blocked(p))
+    assert req.erp.get_request(mr).lines == (RequestLine("PAPER-A4", D(3)),)
+    cancel = {"doctype": "Material Request", "name": mr, "reason": "live test"}
+    assert "cancel" in blocked(req.preview("cancel_document", cancel))  # a draft
+    wf = {"doctype": "Material Request", "name": mr}
+    assert run(req, "workflow_action", {**wf, "action": SUBMIT_FOR_APPROVAL})[1].outcome \
+        == "written"
+    assert run(svc("MANAGER"), "workflow_action", {**wf, "action": APPROVE})[1].outcome \
+        == "written"
+    assert "cancel" in blocked(req2.preview("cancel_document", cancel))  # not theirs
+    p, out = run(req, "cancel_document", cancel)
+    assert out.outcome == "written", (out.message, blocked(p))
+    assert req.erp.get_doc("Material Request", mr)["docstatus"] == 2
+    assert req.erp.get_request(mr).state == DocState.CANCELLED
 
 
 def test_live_close_order(created):

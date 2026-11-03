@@ -101,16 +101,19 @@ def _request_checks(svc: Service, order: PurchaseOrder,
     request = erp.get_request(order.request) if order.request else None
     from_request = [o for o in erp.list_orders(since=request.created)
                     if o.request == request.id] if request else []
-    quotes = []
+    quotes, suppliers, own = [], {}, []
     if order.total >= policy.quotes.threshold and not order.sole_source_reason:
         quotes = erp.list_quotes(item_codes=sorted({ln.item_code for ln in order.lines}),
                                  since=today - timedelta(days=policy.quotes.lookback_days))
+        suppliers = {s: erp.get_supplier(s) for s in sorted({q.supplier_id for q in quotes})}
+        own = [q for q in P.counted_quotes(order, quotes, policy, today, suppliers)[0]
+               if q.supplier_id == order.supplier_id]
     linked = {q: erp.get_quote(q) for q in order.quotations}
     return [P.request_required(order, request, policy),
             P.request_split(order, recent, policy, today),
             P.request_quantity(order, request, from_request),
-            P.competitive_quotes(order, quotes, policy, today),
-            P.quote_price(order, linked)]
+            P.competitive_quotes(order, quotes, policy, today, suppliers=suppliers),
+            P.quote_price(order, linked, own)]
 
 
 def _order_checks(svc: Service, order: PurchaseOrder, with_prices: bool,

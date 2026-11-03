@@ -40,9 +40,54 @@ def test_connector_protocol_has_no_forbidden_methods():
 
 
 def test_no_tool_can_pay_bank_or_delete():
+    """Payments are in scope only through pay_supplier (a draft paying approved invoices,
+    through the pack's checks and the payment workflow); no tool names bank details or
+    deletion."""
     tools = [t.name for t in asyncio.run(server.mcp.list_tools())]
-    assert len(tools) == 30
-    assert not [n for n in tools if any(f in n.lower() for f in FORBIDDEN)]
+    assert len(tools) == 31
+    assert _forbidden(tools) == ["pay_supplier"]
+
+
+def test_payment_type_party_and_paid_to_are_never_the_callers():
+    """A payment is always a Pay to a Supplier, into the supplier's payable account as
+    ERPNext maps it from the invoice: no internal transfer, no other party type, no
+    caller-chosen paid_to, through any layer."""
+    from fake_erpnext import FakeErpNext, connector
+
+    from erp_guard.packs.p2p.models import Allocation
+    from erp_guard.service import InvalidArgs, Service
+    # The connector methods take no such argument...
+    for impl in (base.P2PConnector, MemoryErp, ErpNext):
+        params = set(inspect.signature(impl.create_payment).parameters) - {"self"}
+        assert params == {"supplier_id", "allocations", "paid_from", "remarks"}, impl
+    # ...and whatever ERPNext's mapper drafts, the entry sent is a Pay to the Supplier,
+    # paid_to as mapped.
+    bank, pi = "Demo Operating Bank - LDU", "ACC-PINV-1"
+    fake = FakeErpNext("treasury@example.com")
+    fake.mapped["get_payment_entry"] = {
+        "doctype": "Payment Entry", "payment_type": "Internal Transfer",
+        "party_type": "Employee", "party": "HR-EMP-1", "paid_from": bank,
+        "posting_date": "2026-11-02",
+        "paid_to": "Creditors - LDU", "references": [
+            {"doctype": "Payment Entry Reference", "reference_doctype": "Purchase Invoice",
+             "reference_name": pi, "allocated_amount": 10.0}]}
+    erp = connector(fake, writable=lambda d: d == "Payment Entry",
+                    allowed_bank_values={bank})
+    erp.create_payment("TRANE U.S. INC", [Allocation(pi, 10)], bank)
+    sent = next(b["doc"] for b in fake.method_calls("frappe.client.insert"))
+    assert (sent["payment_type"], sent["party_type"], sent["party"], sent["paid_to"]) == (
+        "Pay", "Supplier", "TRANE U.S. INC", "Creditors - LDU")
+    # pay_supplier refuses them as arguments, and no connector edits them on a draft.
+    from erp_guard.policy import load_policy
+    svc = Service(MemoryErp(user="treasury@example.com"), load_policy())
+    for extra in ({"payment_type": "Internal Transfer"}, {"paid_to": "Cash - LDU"},
+                  {"party_type": "Employee"}, {"paid_from": "Cash - LDU"}):
+        with pytest.raises(InvalidArgs, match="Unknown argument"):
+            svc.preview("pay_supplier", {"supplier": "S", "invoices": [], **extra})
+    for field in ("payment_type", "paid_to", "party_type", "party", "paid_from"):
+        for c in (MemoryErp(), erp):
+            with pytest.raises(base.ErpError, match=field):
+                c.update_draft("Payment Entry", "PE-1", {field: "x"})
 
 
 def _client(seen, **kw):

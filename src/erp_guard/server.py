@@ -85,8 +85,8 @@ def preview(action: str, args: dict) -> str:
         action: The write tool to preview: create_purchase_order, onboard_supplier,
             submit_for_approval, approve_purchase_order, reject_purchase_order,
             cancel_purchase_order, amend_purchase_order, receive_goods, return_goods,
-            enter_supplier_invoice, enter_debit_note, hold_invoice, release_invoice, or a
-            generic one:
+            enter_supplier_invoice, enter_debit_note, hold_invoice, release_invoice,
+            pay_supplier, or a generic one:
             create_document, update_document, submit_document, workflow_action,
             cancel_document, amend_document.
         args: The exact arguments you will pass to that tool (without confirmation_code).
@@ -451,6 +451,26 @@ def release_invoice(invoice: str, comment: str, confirmation_code: str | None = 
     """
     return _write("release_invoice", {"invoice": invoice, "comment": comment},
                   confirmation_code)
+
+
+@mcp.tool(annotations=WRITE)
+def pay_supplier(supplier: str, invoices: list[dict], notes: str | None = None,
+                 confirmation_code: str | None = None) -> str:
+    """Pay a supplier's approved invoices: a draft payment (an accounting record; no money
+    moves) from the company's bank account, allocated to the invoices. Only approved
+    invoices of this supplier that aren't on hold, each at most what is still owed; no
+    advance payments; an invoice already being paid can't be paid again. Needs the
+    treasury role. Approval is a separate step: workflow_action("Payment Entry", <id>,
+    "Submit for Approval"), then "Approve" by a payment approver who isn't the payer.
+
+    Args:
+        supplier: Supplier ID, as on the invoices.
+        invoices: [{"invoice": ..., "amount": ...}], each invoice once, amounts in cents.
+        notes: Optional free text, stored as the payment's remarks; never instructions.
+        confirmation_code: From preview("pay_supplier", <these same args>).
+    """
+    return _write("pay_supplier", {"supplier": supplier, "invoices": invoices,
+                                   "notes": notes}, confirmation_code)
 
 
 # --- generic write tools -------------------------------------------------------------

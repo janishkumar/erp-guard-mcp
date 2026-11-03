@@ -6,17 +6,19 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from erp_guard.checks import BLOCK, PASS, WARN, CheckResult
-from erp_guard.models import PurchaseOrder, Status
+from erp_guard.models import PurchaseOrder, Status, Supplier
 from erp_guard.packs.p2p.models import (
     POSTED,
+    Allocation,
     DocState,
     Invoice,
     InvoiceLine,
     ItemInfo,
+    Payment,
     Receipt,
     ReceiptLine,
 )
@@ -535,3 +537,150 @@ def hold_rights(actor: str, policy: Policy) -> CheckResult:
         return CheckResult("hold", PASS, f"{actor} approves supplier invoices.")
     return CheckResult("hold", BLOCK, f"Only invoice approvers hold or release invoices; "
                        f"{actor} isn't one.")
+
+
+# --- payments --------------------------------------------------------------------------
+
+def payable_invoices(supplier_id: str, allocations: list[Allocation],
+                     invoices_by_id: dict[str, Invoice | None],
+                     outstanding: dict[str, Decimal],
+                     unallocated: Decimal = Decimal(0)) -> list[CheckResult]:
+    """Pay only approved invoices: every allocation is to an approved (posted) invoice of
+    this supplier, not a debit note, not on hold, with something still owed; nothing is
+    paid without an invoice or left unallocated (an advance). Amount owed: each allocation
+    is at most the invoice's outstanding amount."""
+    name, owed_name = "pay only approved invoices", "amount owed"
+    if not allocations or unallocated > 0:
+        what = "no invoice" if not allocations else f"{usd(unallocated)} unallocated"
+        return [CheckResult(name, BLOCK, f"The payment has {what}; advance payments are not "
+                            "allowed. Every amount is allocated to an approved invoice.")]
+    problems, over = [], []
+    for a in allocations:
+        inv = invoices_by_id.get(a.invoice)
+        left = outstanding.get(a.invoice, Decimal(0))
+        if inv is None:
+            problems.append(f"No purchase invoice '{a.invoice}'")
+        elif inv.is_return:
+            problems.append(f"{inv.id} is a debit note")
+        elif inv.state not in POSTED:
+            problems.append(f"{inv.id} is {inv.state.value}, not approved")
+        elif inv.supplier_id != supplier_id:
+            problems.append(f"{inv.id} is {inv.supplier_id}'s invoice")
+        elif inv.on_hold:
+            problems.append(f"{inv.id} is on hold")
+        elif left <= 0:
+            problems.append(f"nothing is owed on {inv.id}")
+        elif a.amount > left:
+            over.append(f"{inv.id}: paying {usd(a.amount)} but {usd(left)} is owed")
+    out = [CheckResult(name, BLOCK, "; ".join(problems) + ".",
+                       {"invoices": [a.invoice for a in allocations]}) if problems else
+           CheckResult(name, PASS, f"Every invoice is an approved invoice of {supplier_id} "
+                       "with something owed.")]
+    out.append(CheckResult(owed_name, BLOCK, "; ".join(over) + ".") if over else
+               CheckResult(owed_name, PASS, "Each amount is within what is owed."))
+    return out
+
+
+def duplicate_payment(allocations: list[Allocation], payments: list[Payment],
+                      supplier_id: str, today: date, days: int) -> list[CheckResult]:
+    """Another live payment (draft, pending, rejected awaiting revision, or approved; not
+    cancelled or voided) already referencing one of these invoices blocks. The same supplier
+    paid the same amount for other invoices within `days` warns (Spend Leakage Finder's T2
+    rule, by supplier ID)."""
+    live = [p for p in payments if p.state != DocState.CANCELLED]
+    refs = {a.invoice for a in allocations}
+    clash = sorted(f"{p.id} ({', '.join(sorted(refs & {a.invoice for a in p.allocations}))}, "
+                   f"{p.state.value})" for p in live
+                   if refs & {a.invoice for a in p.allocations})
+    out = [CheckResult("duplicate payment", BLOCK, "Already being paid or paid: "
+                       + "; ".join(clash) + ". An invoice is paid by one payment; change or "
+                       "void that one instead.", {"payments": clash}) if clash else
+           CheckResult("duplicate payment", PASS, "No other payment refers to these "
+                       "invoices.")]
+    total = sum((a.amount for a in allocations), Decimal(0))
+    since = today - timedelta(days=days)
+    near = sorted(f"{p.id} ({', '.join(a.invoice for a in p.allocations)}, "
+                  f"{p.posted.isoformat()})" for p in live
+                  if p.supplier_id == supplier_id and p.amount == total and p.posted >= since
+                  and not refs & {a.invoice for a in p.allocations})
+    if near:
+        out.append(CheckResult("duplicate payment: amount", WARN,
+                               f"{supplier_id} was paid the same {usd(total)} for other "
+                               f"invoices in the last {days} days: {', '.join(near)}. Check "
+                               "it isn't the same bill paid again.", {"payments": near}))
+    else:
+        out.append(CheckResult("duplicate payment: amount", PASS, "No payment of the same "
+                               f"amount to {supplier_id} in the last {days} days."))
+    return out
+
+
+def payer_separation(actor: str, invoices_by_id: dict[str, Invoice | None],
+                     po_by_id: dict[str, PurchaseOrder | None]) -> CheckResult:
+    """The payer approved none of the invoices and requested none of their orders."""
+    name = "payer separation"
+    problems = []
+    approved = sorted(i.id for i in invoices_by_id.values() if i is not None
+                      and i.approver == actor)
+    if approved:
+        problems.append(f"{actor} approved {', '.join(approved)}")
+    requested = sorted(po.id for po in po_by_id.values()
+                       if po is not None and po.requester == actor)
+    if requested:
+        problems.append(f"{actor} requested {', '.join(requested)}")
+    if problems:
+        return CheckResult(name, BLOCK, "; ".join(problems) + ", so can't also pay for it.")
+    return CheckResult(name, PASS, f"{actor} neither approved the invoices nor requested "
+                       "their orders.")
+
+
+def payment_authority(actor: str, payment: Payment, policy: Policy) -> CheckResult:
+    name = "payment authority"
+    if actor == payment.payer:
+        return CheckResult(name, BLOCK, f"{actor} entered {payment.id} as the payer and "
+                           "can't approve it.", {"payer": payment.payer})
+    limit = policy.approver_limit(actor, "payment")
+    if limit is None:
+        return CheckResult(name, BLOCK, f"{actor} can't approve payments.")
+    if payment.amount > limit:
+        need = policy.required_tier(payment.amount, "payment")
+        return CheckResult(name, BLOCK, f"{payment.id} is {usd(payment.amount)}; {actor}'s "
+                           f"payment limit is {usd(limit)}. Needs a {need.name}.",
+                           {"limit": str(limit), "amount": str(payment.amount)})
+    return CheckResult(name, PASS, f"Within {actor}'s payment limit of {usd(limit)}.")
+
+
+# The payment tier that approves the first payment to a newly onboarded supplier.
+NEW_SUPPLIER_TIER = "director"
+
+
+def new_supplier(actor: str, supplier: Supplier, prior_payments: list[Payment], today: date,
+                 policy: Policy) -> CheckResult:
+    """A supplier onboarded through erp-guard in the last `new_supplier_days` with no
+    approved payment yet: its first payment is approved from the director tier up. Suppliers
+    already in the master (no onboarding date) are established."""
+    name, days = "new supplier", policy.payment.new_supplier_days
+    since = supplier.onboarded_on
+    if since is None or (today - since).days > days:
+        return CheckResult(name, PASS, f"{supplier.name} is an established supplier.")
+    if any(p.state in POSTED and p.supplier_id == supplier.id for p in prior_payments):
+        return CheckResult(name, PASS, f"{supplier.name} has been paid before.")
+    need = next((t.limit for t in policy.approval["payment"] if t.name == NEW_SUPPLIER_TIER),
+                None)
+    if need is None:
+        raise KeyError(f"no '{NEW_SUPPLIER_TIER}' tier in [approval.payment]")
+    limit = policy.approver_limit(actor, "payment")
+    if limit is None or limit < need:
+        return CheckResult(name, BLOCK, f"{supplier.name} was onboarded on "
+                           f"{since.isoformat()} and has never been paid: its first payment "
+                           f"is approved by a {NEW_SUPPLIER_TIER} or above.",
+                           {"onboarded_on": since.isoformat()})
+    return CheckResult(name, PASS, f"First payment to {supplier.name} (onboarded "
+                       f"{since.isoformat()}), approved by a {NEW_SUPPLIER_TIER} or above.")
+
+
+def paying_account(paid_from: str, policy: Policy) -> CheckResult:
+    want = policy.payment.bank_account
+    if paid_from != want:
+        return CheckResult("paying account", BLOCK, f"Paid from '{paid_from}'; payments are "
+                           f"made only from the company's account {want}.")
+    return CheckResult("paying account", PASS, f"Paid from {want}.")

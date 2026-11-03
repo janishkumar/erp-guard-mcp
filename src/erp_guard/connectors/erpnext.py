@@ -393,10 +393,16 @@ def _receipt(d: dict, rows: list[dict]) -> Receipt:
                    bool(d.get("is_return")), d.get("return_against") or None)
 
 
+def _voidable_state(d: dict) -> DocState:
+    """A workflow document's state, where a draft voided through erp-guard
+    (erp_guard_cancelled) is cancelled for every check."""
+    if d.get("docstatus") == 0 and d.get("erp_guard_cancelled"):
+        return DocState.CANCELLED
+    return _doc_state(d, True)
+
+
 def _invoice(d: dict, rows: list[dict]) -> Invoice:
-    # A draft voided through erp-guard (erp_guard_cancelled) is cancelled for every check.
-    state = DocState.CANCELLED if d.get("docstatus") == 0 and d.get("erp_guard_cancelled") \
-        else _doc_state(d, True)
+    state = _voidable_state(d)
     return Invoice(
         d["name"], d["supplier"], d.get("bill_no") or "",
         _date(d.get("bill_date") or d["posting_date"]), d["owner"], state,
@@ -418,12 +424,15 @@ def _payment(d: dict, rows: list[dict]) -> Payment:
         raise ErpError(f"Payment Entry {d['name']} references {', '.join(other)}, not only "
                        "supplier invoices")
     return Payment(
-        d["name"], d.get("party") or "", d["owner"], _doc_state(d, True),
+        d["name"], d.get("party") or "", d["owner"], _voidable_state(d),
         _date(d["posting_date"]), d.get("paid_from") or "",
         tuple(Allocation(r["reference_name"], _dec(r["allocated_amount"])) for r in rows),
         approver=d.get("erp_guard_approver") or None,
         unallocated=_dec(d.get("unallocated_amount")))
 
+
+# Drafts of these are voided (flagged erp_guard_cancelled) rather than cancelled.
+_VOIDABLE = frozenset({"Purchase Invoice", "Payment Entry"})
 
 # doctype -> (child table field, its DocType, header fields, row fields, parser)
 _P2P_DOCS: dict[str, tuple[str, str, list[str], list[str], Callable]] = {
@@ -447,7 +456,7 @@ _P2P_DOCS: dict[str, tuple[str, str, list[str], list[str], Callable]] = {
     "Payment Entry": ("references", "Payment Entry Reference",
                       ["name", "owner", "docstatus", "workflow_state", "party",
                        "posting_date", "paid_from", "erp_guard_approver",
-                       "unallocated_amount"],
+                       "unallocated_amount", "erp_guard_cancelled"],
                       ["reference_doctype", "reference_name", "allocated_amount"], _payment),
 }
 
@@ -1012,10 +1021,12 @@ class ErpNext:
                      update_stock=0, is_paid=0)
         return self._parse("Purchase Invoice", self.insert(draft))
 
-    def create_payment(self, supplier_id, allocations, paid_from):
+    def create_payment(self, supplier_id, allocations, paid_from, remarks=""):
         """A draft Payment Entry (Pay, to the supplier) from ERPNext's own payment for each
         invoice, merged into one, allocating exactly the given amounts. Paid from the given
-        ledger account; no bank account record, and no bank fields are sent."""
+        ledger account; no bank account record, and no bank fields are sent. Whatever the
+        mapper says, the entry is a Pay to a Supplier; paid_to stays the supplier's payable
+        account as ERPNext maps it from the invoice, and the caller can't set it."""
         if not allocations:
             raise ErpError("A payment pays at least one invoice")
         doc, refs = None, []
@@ -1033,6 +1044,8 @@ class ErpNext:
                    party=supplier_id, paid_from=paid_from, paid_amount=total,
                    received_amount=total, reference_date=date.today().isoformat(),
                    reference_no=", ".join(a.invoice for a in allocations)[:140])
+        if remarks:  # ERPNext writes its own remarks unless told they're custom
+            doc.update(remarks=remarks, custom_remarks=1)
         for k in [k for k, v in doc.items() if _BANK_KEY.search(k) and v in (None, "")]:
             del doc[k]  # e.g. bank, bank_account_no, party_bank_account: all empty
         return self._parse("Payment Entry", self.insert(doc))
@@ -1055,30 +1068,30 @@ class ErpNext:
     def cancel_doc(self, doctype, id, reason):
         """Cancel a submitted document (ERPNext keeps it, cancelled). A purchase order goes
         through cancel_order, which also handles drafts and stores the reason; a draft or
-        rejected purchase invoice is voided the same way (_void_invoice). For other types
-        the reason is in erp-guard's audit trail."""
+        rejected purchase invoice or payment is voided the same way (_void_draft). For
+        other types the reason is in erp-guard's audit trail."""
         if doctype == "Purchase Order":
             self.cancel_order(id, reason)
             return
         d = self._require(doctype, id)
-        if doctype == "Purchase Invoice" and d.get("docstatus") == 0:
-            self._void_invoice(d, reason)
+        if doctype in _VOIDABLE and d.get("docstatus") == 0:
+            self._void_draft(doctype, d, reason)
             return
         if d.get("docstatus") != 1:
             raise ErpError(f"{doctype} {id} isn't submitted; only submitted documents are "
                            "cancelled")
         self.cancel(doctype, id)
 
-    def _void_invoice(self, d: dict, reason: str) -> None:
-        """A draft or rejected invoice can't be cancelled in ERPNext (and erp-guard never
-        deletes): it gets the `erp_guard_cancelled` flag and the reason, and the workflow
-        offers no transition on it any more."""
+    def _void_draft(self, doctype: str, d: dict, reason: str) -> None:
+        """A draft or rejected invoice or payment can't be cancelled in ERPNext (and
+        erp-guard never deletes): it gets the `erp_guard_cancelled` flag and the reason,
+        and the workflow offers no transition on it any more."""
         if d.get("erp_guard_cancelled"):
-            raise ErpError(f"Purchase Invoice {d['name']} is already cancelled")
+            raise ErpError(f"{doctype} {d['name']} is already cancelled")
         if (d.get("workflow_state") or "Draft") not in ("Draft", "Rejected"):
-            raise ErpError(f"Purchase Invoice {d['name']} is {d.get('workflow_state')}; only "
-                           "a draft or rejected invoice is voided")
-        self.c.request("PUT", _res("Purchase Invoice", d["name"]),
+            raise ErpError(f"{doctype} {d['name']} is {d.get('workflow_state')}; only a "
+                           "draft or rejected one is voided")
+        self.c.request("PUT", _res(doctype, d["name"]),
                        body={"erp_guard_cancelled": 1, "erp_guard_reason": reason})
 
     def update_draft(self, doctype, id, fields):
@@ -1101,6 +1114,8 @@ class ErpNext:
             total = float(sum((_dec(r["allocated_amount"]) for r in doc["references"]),
                               Decimal(0)))
             doc.update(paid_amount=total, received_amount=total)
+        if doctype == "Payment Entry" and "remarks" in fields:
+            doc["custom_remarks"] = 1  # else ERPNext replaces them with its own
         self.save(doc)
 
     def close_order(self, po, reason):

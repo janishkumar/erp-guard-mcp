@@ -120,8 +120,9 @@ class P2PConnector(ErpConnector, Protocol):
     def create_debit_note(self, invoice_id: str, lines: list[InvoiceLine],
                           remarks: str) -> Invoice: ...
     def create_payment(self, supplier_id: str, allocations: list[Allocation],
-                       paid_from: str) -> Payment:
-        """A draft paying exactly the allocations; approval goes through the workflow."""
+                       paid_from: str, remarks: str = "") -> Payment:
+        """A draft paying exactly the allocations to the supplier (Pay; the payable account
+        is the ERP's own); approval goes through the workflow."""
         ...
     def workflow(self, doctype: str, id: str, action: str, comment: str = "") -> None: ...
     def submit_doc(self, doctype: str, id: str) -> None:

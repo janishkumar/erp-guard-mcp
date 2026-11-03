@@ -736,6 +736,91 @@ def test_live_void_draft_invoice(created):
     assert svc("CONTROLLER").erp.get_invoice(again.target).state == DocState.CANCELLED
 
 
+def test_live_pay_and_approve(created, undo):
+    """Payments through the guarded tools, as treasury: more than is owed is refused and
+    writes nothing; a payment from the policy's bank account is entered (a Pay to the
+    supplier, paid_to as ERPNext maps it), can't be entered twice, is edited within what is
+    owed, submitted, refused to the payer and approved by the manager, so nothing is owed;
+    the payer can't cancel it, the manager can. A second draft is voided by the payer: it
+    stays a draft with the erp_guard_cancelled flag, gets no workflow action, and no longer
+    blocks paying the invoice. Everything is cancelled or voided afterwards; nothing is a
+    history document."""
+    po = _approved_order(created, [Line("HVAC-SVC", D(1), D(640))])
+    ap, ctl, trs, mgr = svc("AP"), svc("CONTROLLER"), svc("TREASURY"), svc("MANAGER")
+    out = run(ap, "enter_supplier_invoice", {
+        "supplier": "TRANE U.S. INC", "bill_no": f"PAY-{uuid.uuid4().hex[:6]}",
+        "bill_date": date.today().isoformat(),
+        "lines": [{"po": po, "item_code": "HVAC-SVC", "qty": 1, "rate": 640}]})[1]
+    assert out.outcome == "written", out.message
+    inv = out.target
+    undo.append((ctl.erp, PI, inv))
+    for s, action in ((ap, SUBMIT_FOR_APPROVAL), (ctl, APPROVE)):
+        out = run(s, "workflow_action", {"doctype": PI, "name": inv, "action": action})[1]
+        assert out.outcome == "written", out.message
+    assert trs.erp.outstanding(inv) == D(640)
+    blocked = lambda p: {c.check for c in p.checks if c.level == "block"}  # noqa: E731
+    pay = lambda amount: {"supplier": "TRANE U.S. INC", "notes": "live payment",  # noqa: E731
+                          "invoices": [{"invoice": inv, "amount": amount}]}
+
+    p, out = run(trs, "pay_supplier", pay(641))
+    assert p.code is None and "amount owed" in blocked(p) and out.outcome == "refused"
+    assert trs.erp.list_payments(invoice=inv) == []
+    p, out = run(trs, "pay_supplier", pay(600))
+    assert out.outcome == "written", out.message
+    pe = out.target
+    undo.append((mgr.erp, PE, pe))
+    doc = trs.erp.get_doc(PE, pe)
+    credit_to = trs.erp.get_doc(PI, inv)["credit_to"]
+    assert (doc["payment_type"], doc["party_type"], doc["party"], doc["paid_from"],
+            doc["paid_to"], doc.get("bank_account"), doc["remarks"]) == (
+        "Pay", "Supplier", "TRANE U.S. INC", demo.BANK_ACCOUNT, credit_to, None,
+        "live payment")
+    assert "duplicate payment" in blocked(trs.preview("pay_supplier", pay(40)))
+
+    upd = lambda amount: {"doctype": PE, "name": pe,  # noqa: E731
+                          "fields": {"references": [{"allocated_amount": amount}]}}
+    assert "amount owed" in blocked(trs.preview("update_document", upd(641)))
+    assert run(trs, "update_document", upd(640))[1].outcome == "written"
+    assert trs.erp.get_payment(pe).amount == D(640)
+    assert float(trs.erp.get_doc(PE, pe)["paid_amount"]) == 640.0
+
+    wf = lambda s, action: run(s, "workflow_action", {  # noqa: E731
+        "doctype": PE, "name": pe, "action": action})
+    assert wf(trs, SUBMIT_FOR_APPROVAL)[1].outcome == "written"
+    p, out = wf(trs, APPROVE)
+    assert "payment authority" in blocked(p) and out.outcome == "refused"
+    out = wf(mgr, APPROVE)[1]
+    assert out.outcome == "written", out.message
+    got = trs.erp.get_payment(pe)
+    assert (got.state, got.approver, got.payer) == (
+        DocState.APPROVED, "manager@example.com", "treasury@example.com")
+    assert trs.erp.outstanding(inv) == 0
+
+    cancel = lambda s, name: run(s, "cancel_document", {  # noqa: E731
+        "doctype": PE, "name": name, "reason": "live test cleanup"})
+    p, out = cancel(trs, pe)
+    assert "cancel payment" in blocked(p) and out.outcome == "refused"
+    out = cancel(mgr, pe)[1]
+    assert out.outcome == "written", out.message
+    assert trs.erp.get_payment(pe).state == DocState.CANCELLED
+    assert trs.erp.outstanding(inv) == D(640)
+
+    out = run(trs, "pay_supplier", pay(640))[1]  # the cancelled one no longer counts
+    assert out.outcome == "written", out.message
+    draft = out.target
+    out = cancel(trs, draft)[1]
+    assert out.outcome == "written", out.message
+    doc = trs.erp.get_doc(PE, draft)
+    assert (doc["docstatus"], doc["erp_guard_cancelled"], doc["erp_guard_reason"]) == (
+        0, 1, "live test cleanup")
+    assert trs.erp.get_payment(draft).state == DocState.CANCELLED
+    assert trs.erp.transitions(PE, draft) == []
+    flow = trs.erp.get_meta(PE)["__workflow_docs"][0]
+    assert {t.get("condition") for t in flow["transitions"]} == {
+        "not doc.erp_guard_cancelled"}
+    assert run(trs, "pay_supplier", pay(640))[0].code  # payable again; not written
+
+
 def test_live_p2p_requests_and_quotes(undo):
     """Purchase request on its workflow, a request for quotation from it, a supplier quote
     answering it and one without; all cancelled afterwards. In ERPNext only Purchase

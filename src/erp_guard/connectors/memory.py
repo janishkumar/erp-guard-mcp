@@ -328,7 +328,7 @@ class MemoryErp:
         self.invoices[note.id] = note
         return note
 
-    def create_payment(self, supplier_id, allocations, paid_from):
+    def create_payment(self, supplier_id, allocations, paid_from, remarks=""):
         if not allocations:
             raise ErpError("A payment pays at least one invoice")
         if paid_from != self.bank_account:
@@ -338,6 +338,8 @@ class MemoryErp:
         p = Payment(self._next("PE"), supplier_id, self.user, DocState.DRAFT, self.today,
                     paid_from, tuple(allocations))
         self.payments[p.id] = p
+        if remarks:
+            self._keep("Payment Entry", p.id, remarks=remarks)
         return p
 
     def workflow(self, doctype, id, action, comment=""):
@@ -370,7 +372,8 @@ class MemoryErp:
         state = self._state(doctype, id)
         if state == DocState.CANCELLED:
             raise ErpError(f"{doctype} {id} is already cancelled")
-        if doctype == "Purchase Invoice" and state in (DocState.DRAFT, DocState.REJECTED):
+        if doctype in ("Purchase Invoice", "Payment Entry") and \
+                state in (DocState.DRAFT, DocState.REJECTED):
             # Voided, as ERPNext's erp_guard_cancelled flag: cancelled for every check.
             self._set(doctype, id, DocState.CANCELLED)
             self._keep(doctype, id, reason=reason, erp_guard_cancelled=1)

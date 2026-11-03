@@ -9,8 +9,10 @@ and Withdraw happen only inside `amend_purchase_order`. Cancelling a Purchase Re
 its own checks (packs.p2p.receipts); receipts are otherwise written by `receive_goods` and
 `return_goods`. A Purchase Invoice's workflow actions, draft edits and cancellation run the
 invoice checks (packs.p2p.invoices); invoices and debit notes are entered by
-`enter_supplier_invoice` and `enter_debit_note`. Every other operation on a P2P-owned type
-is refused until its task tools land.
+`enter_supplier_invoice` and `enter_debit_note`. A Payment Entry's workflow actions, draft
+edits and cancellation run the payment checks (packs.p2p.payments); payments are entered by
+`pay_supplier`. Every other operation on a P2P-owned type is refused until its task tools
+land.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from erp_guard.packs.p2p import (
     SUBMIT_FOR_APPROVAL,
     WITHDRAW,
     invoices,
+    payments,
     receipts,
 )
 
@@ -53,6 +56,9 @@ _DIRECT = {
     ("Purchase Invoice", Op.WORKFLOW): (invoices.evaluate_workflow, invoices.apply_workflow),
     ("Purchase Invoice", Op.UPDATE): (invoices.evaluate_update, invoices.apply_update),
     ("Purchase Invoice", Op.CANCEL): (invoices.evaluate_cancel, invoices.apply_cancel),
+    ("Payment Entry", Op.WORKFLOW): (payments.evaluate_workflow, payments.apply_workflow),
+    ("Payment Entry", Op.UPDATE): (payments.evaluate_update, payments.apply_update),
+    ("Payment Entry", Op.CANCEL): (payments.evaluate_cancel, payments.apply_cancel),
 }
 # Unsupported operations whose step has a tool: the refusal names it.
 _INSTEAD = {
@@ -61,6 +67,10 @@ _INSTEAD = {
     ("Purchase Invoice", Op.SUBMIT): "an invoice is submitted by approving it with "
                                      "workflow_action",
     ("Purchase Invoice", Op.AMEND): "enter a new invoice with enter_supplier_invoice",
+    ("Payment Entry", Op.CREATE): "pay approved invoices with pay_supplier",
+    ("Payment Entry", Op.SUBMIT): "a payment is submitted by approving it with "
+                                  "workflow_action",
+    ("Payment Entry", Op.AMEND): "enter a new payment with pay_supplier",
 }
 
 
@@ -79,6 +89,7 @@ class P2PPack:
         "Purchase Receipt": ("receive_goods", "return_goods"),
         "Purchase Invoice": ("enter_supplier_invoice", "enter_debit_note", "hold_invoice",
                              "release_invoice"),
+        "Payment Entry": ("pay_supplier",),
         "Supplier": ("onboard_supplier",),
     }
 

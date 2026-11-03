@@ -709,7 +709,8 @@ def test_live_invoice_match_and_hold(created, undo):
 def test_live_void_draft_invoice(created):
     """A draft invoice keyed by mistake is voided through cancel_document: it stays a
     draft with the erp_guard_cancelled flag and the reason, the workflow offers nothing on
-    it, and the same bill number is then entered again. Both drafts end voided."""
+    it, and the same bill number is then entered again. Both drafts end voided: the first
+    by AP, who entered it, the second by the controller, an invoice approver."""
     po = _approved_order(created, [Line("HVAC-SVC", D(1), D(640))])
     ap = svc("AP")
     args = {"supplier": "TRANE U.S. INC", "bill_no": f"VOID-{uuid.uuid4().hex[:6]}",
@@ -719,7 +720,7 @@ def test_live_void_draft_invoice(created):
     assert first.outcome == "written", first.message
     p = ap.preview("enter_supplier_invoice", args)
     assert p.code is None  # the same number again, while the first is live
-    void = lambda name: run(ap, "cancel_document", {  # noqa: E731
+    void = lambda name, s=ap: run(s, "cancel_document", {  # noqa: E731
         "doctype": PI, "name": name, "reason": "keyed twice"})[1]
     out = void(first.target)
     assert out.outcome == "written", out.message
@@ -730,7 +731,9 @@ def test_live_void_draft_invoice(created):
     assert ap.erp.transitions(PI, first.target) == []
     again = run(ap, "enter_supplier_invoice", args)[1]
     assert again.outcome == "written", again.message
-    assert void(again.target).outcome == "written"
+    out = void(again.target, svc("CONTROLLER"))
+    assert out.outcome == "written", out.message
+    assert svc("CONTROLLER").erp.get_invoice(again.target).state == DocState.CANCELLED
 
 
 def test_live_p2p_requests_and_quotes(undo):

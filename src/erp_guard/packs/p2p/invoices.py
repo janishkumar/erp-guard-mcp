@@ -149,20 +149,26 @@ def _context(svc: Service, pos, codes, exclude: str | None = None) -> _Context:
 
 def _receipt_left(r: Receipt, po: str, item: str, ctx: _Context) -> Decimal:
     """What a receipt brought in of (po, item), less posted returns against it and less
-    what live invoices already match to it. Debit notes on it give room back only up to
-    the goods returned (as in checks.invoiced)."""
+    what live invoices already match to it. Approved debit notes on it give room back only
+    up to the goods returned against it on or after the first invoice of it (as in
+    checks.invoiced)."""
     def on(lines) -> Decimal:
         return sum((ln.qty for ln in lines if (ln.po, ln.item_code) == (po, item)),
                    Decimal(0))
-    got = on(r.lines)
-    back = sum((on(x.lines) for x in ctx.receipts if x.is_return
-                and x.return_against == r.id and x.state in POSTED), Decimal(0))
     live = [i for i in ctx.invoices if i.state != DocState.CANCELLED]
-    billed = sum((on(ln for ln in i.lines if ln.receipt == r.id) for i in live
-                  if not i.is_return), Decimal(0))
+    bills = [i for i in live if not i.is_return
+             and any(ln.receipt == r.id and (ln.po, ln.item_code) == (po, item)
+                     for ln in i.lines)]
+    since = min((i.posting_date for i in bills), default=None)
+    returns = [x for x in ctx.receipts if x.is_return and x.return_against == r.id
+               and x.state in POSTED]
+    back = sum((on(x.lines) for x in returns), Decimal(0))
+    back_after = sum((on(x.lines) for x in returns
+                      if since is not None and x.posted >= since), Decimal(0))
+    billed = sum((on(ln for ln in i.lines if ln.receipt == r.id) for i in bills), Decimal(0))
     credited = sum((on(ln for ln in i.lines if ln.receipt == r.id) for i in live
-                    if i.is_return), Decimal(0))
-    return got - back - (billed - min(credited, back))
+                    if i.is_return and i.state in POSTED), Decimal(0))
+    return on(r.lines) - back - (billed - min(credited, back_after))
 
 
 def _match_receipts(rows: list[dict], ctx: _Context) -> list[InvoiceLine]:

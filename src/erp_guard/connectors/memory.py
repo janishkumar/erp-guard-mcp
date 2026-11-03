@@ -307,7 +307,7 @@ class MemoryErp:
             raise ErpError("An invoice needs at least one line")
         self._check_invoice_lines(lines)
         inv = Invoice(self._next("PI"), supplier_id, bill_no, bill_date, self.user,
-                      DocState.DRAFT, tuple(lines), remarks=remarks)
+                      DocState.DRAFT, tuple(lines), remarks=remarks, posted=self.today)
         self.invoices[inv.id] = inv
         return inv
 
@@ -324,7 +324,7 @@ class MemoryErp:
                 raise ErpError(f"{ln.item_code} on {ln.po} is not on {invoice_id}")
         note = Invoice(self._next("PI"), orig.supplier_id, orig.bill_no, orig.bill_date,
                        self.user, DocState.DRAFT, tuple(lines), is_return=True,
-                       return_against=invoice_id, remarks=remarks)
+                       return_against=invoice_id, remarks=remarks, posted=self.today)
         self.invoices[note.id] = note
         return note
 

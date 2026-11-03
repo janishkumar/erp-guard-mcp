@@ -161,10 +161,15 @@ class Invoice:
     return_against: str | None = None
     is_paid: bool = False
     remarks: str = ""
+    posted: date | None = None  # ERPNext's posting date; the bill date when not known
 
     @property
     def total(self) -> Decimal:
         return sum((ln.amount for ln in self.lines), Decimal(0))
+
+    @property
+    def posting_date(self) -> date:
+        return self.posted or self.bill_date
 
 
 @dataclass(frozen=True)

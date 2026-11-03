@@ -163,19 +163,22 @@ def usd(x: Decimal) -> str:
     return f"${x:,.2f}"
 
 
-_BILL_SEPARATORS = re.compile(r"[\s\-_/.#]+")
+_BILL_SEPARATORS = re.compile(r"[\s\-_/.#]")
 _BILL_PREFIX = re.compile(r"^(?:INVOICE|INV|NO)+(?=\d)")
+# Leading zeros of a run of digits that starts the number or follows a letter; zeros inside
+# a run of digits are kept, so "2026-0042" and "20260042" stay the same number.
 _LEADING_ZEROS = re.compile(r"(?<!\d)0+(?=\d)")
 
 
 def normalise_bill_no(s: str) -> str:
     """A supplier's invoice number as compared for duplicates: upper case, without spaces
     and punctuation, without a leading INV / INVOICE / NO before the digits, and without
-    leading zeros on any run of digits. "INV-01001", "inv 1001" and "1001" are all "1001";
-    "A-01001" and "A-1001" are both "A1001"."""
-    parts = _BILL_SEPARATORS.split((s or "").upper())
-    t = "".join(_LEADING_ZEROS.sub("", part) for part in parts)
-    return _BILL_PREFIX.sub("", t)
+    leading zeros on a run of digits that starts it or follows a letter. "INV-01001",
+    "inv 1001" and "1001" are all "1001"; "A-01001" and "A-1001" are both "A1001"; "2026-0042"
+    and "20260042" are the same."""
+    t = _BILL_SEPARATORS.sub("", (s or "").upper())
+    t = _BILL_PREFIX.sub("", t)
+    return _LEADING_ZEROS.sub("", t)
 
 
 def _live_invoices(invoices: list[Invoice]) -> list[Invoice]:
@@ -196,31 +199,41 @@ class Invoiced:
 
 def invoiced(invoices: list[Invoice], receipts: list[Receipt],
              items: dict[str, ItemInfo]) -> dict[tuple[str, str], Invoiced]:
-    """Per (PO, item): invoices of every state but cancelled add. A debit note gives room
-    back only where the goods went back: for a stock item, credited quantity counts up to
-    the quantity on posted returns (a credit for goods kept is a price adjustment, not room
-    to bill them again), at the credit's average rate. For a service, credits count in
-    full, but outside the strict figures."""
+    """Per (PO, item): invoices of every state but cancelled add. Only approved (posted)
+    debit notes give room back, and only where the goods went back after billing: for a
+    stock item, credited quantity counts up to the quantity on posted returns dated on or
+    after the first invoice for that (PO, item), at the credit's average rate (a credit
+    for goods kept, or for goods returned before they were ever billed, is not room to bill
+    again). For a service, approved credits count in full, but outside the strict figures."""
     billed_q: dict = defaultdict(Decimal)
     billed_a: dict = defaultdict(Decimal)
     credit_q: dict = defaultdict(Decimal)
     credit_a: dict = defaultdict(Decimal)
+    first: dict[tuple[str, str], date] = {}
     for inv in _live_invoices(invoices):
-        q, a = (credit_q, credit_a) if inv.is_return else (billed_q, billed_a)
+        if inv.is_return:
+            if inv.state not in POSTED:
+                continue
+            q, a = credit_q, credit_a
+        else:
+            q, a = billed_q, billed_a
         for ln in inv.lines:
-            q[(ln.po, ln.item_code)] += ln.qty
-            a[(ln.po, ln.item_code)] += ln.amount
-    returned: dict = defaultdict(Decimal)
-    for r in receipts:
-        if r.is_return and r.state in POSTED:
-            for ln in r.lines:
-                returned[(ln.po, ln.item_code)] += ln.qty
+            key = (ln.po, ln.item_code)
+            q[key] += ln.qty
+            a[key] += ln.amount
+            if not inv.is_return:
+                first[key] = min(first.get(key, inv.posting_date), inv.posting_date)
     out = {}
     for key in set(billed_q) | set(credit_q):
         cq, ca = credit_q.get(key, Decimal(0)), credit_a.get(key, Decimal(0))
         bq, ba = billed_q.get(key, Decimal(0)), billed_a.get(key, Decimal(0))
         if is_stock(items, key[1]):
-            back = min(cq, returned.get(key, Decimal(0)))
+            since = first.get(key)
+            returned = sum((ln.qty for r in receipts
+                            if r.is_return and r.state in POSTED and since is not None
+                            and r.posted >= since
+                            for ln in r.lines if (ln.po, ln.item_code) == key), Decimal(0))
+            back = min(cq, returned)
             back_a = ca * back / cq if cq else Decimal(0)
             out[key] = Invoiced(bq - back, ba - back_a, bq - back, ba - back_a)
         else:

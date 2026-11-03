@@ -120,12 +120,20 @@ def _blocks(res):
 
 @pytest.mark.parametrize("raw,want", [
     ("INV-01001", "1001"), ("inv 1001", "1001"), ("1001", "1001"), ("A-1001", "A1001"),
-    ("Invoice #0042", "42"), ("No. 7", "7"), ("INV/2026/007", "20267"),
+    ("Invoice #0042", "42"), ("No. 7", "7"), ("INV/2026/007", "2026007"),
     ("A-01001", "A1001"), ("A01001", "A1001"),
     ("north-1", "NORTH1"), ("INV", "INV"), ("000", "0"),
 ])
 def test_bill_no_normalisation(raw, want):
     assert P.normalise_bill_no(raw) == want
+
+
+@pytest.mark.parametrize("a,b", [
+    ("2026-0042", "20260042"), ("INV-2026-01", "INV202601"), ("INV 2026 007", "INV2026007"),
+    ("A-01001", "A-1001"), ("inv 1001", "INV-01001"),
+])
+def test_bill_no_with_and_without_separators_is_one_number(a, b):
+    assert P.normalise_bill_no(a) == P.normalise_bill_no(b)
 
 
 # --- the pure checks -------------------------------------------------------------------
@@ -240,6 +248,56 @@ def test_returned_and_redelivered_without_credit_is_not_billed_again(erp, policy
     _, _, p = _enter(erp, policy, _args(bill="INV-2", lines=[
         {"po": GOODS, "item_code": "SALT-TON", "qty": 3, "rate": 10}]))
     assert _level(p, "three-way match: quantity") == [BLOCK]
+
+
+def test_return_before_billing_restores_nothing(erp, policy, receipt):
+    # 10 received, 3 sent back before anything was billed, 7 invoiced; then an approved
+    # credit for 3 boxes kept. The early return was never billed, so it frees nothing.
+    from dataclasses import replace
+    rcv = erp.as_user(RCV)
+    ret = rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))], is_return=True,
+                             return_against=receipt.id)
+    erp.receipts[ret.id] = replace(ret, posted=TODAY - timedelta(days=2))
+    inv = _approved(erp, policy, _args(lines=[
+        {"po": GOODS, "item_code": "SALT-TON", "qty": 7, "rate": 10}]))
+    svc, args, p = _note(erp, policy, inv.id, 3)
+    note = erp.get_invoice(svc.execute("enter_debit_note", args, p.code).target)
+    for user, action in ((AP, SUBMIT_FOR_APPROVAL), (CTL, APPROVE)):
+        s, pack, w, _ = _wf(erp, policy, user, note.id, action)
+        pack.apply_write(s, w)
+    _, _, p = _enter(erp, policy, _args(bill="INV-2", lines=[
+        {"po": GOODS, "item_code": "SALT-TON", "qty": 3, "rate": 10}]))
+    assert _level(p, "three-way match: quantity") == [BLOCK] and p.code is None
+
+
+def test_draft_debit_note_frees_nothing(erp, policy, receipt):
+    # Returned after billing and replaced, but the credit is only a draft: no room yet.
+    inv = _approved(erp, policy)
+    rcv = erp.as_user(RCV)
+    rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))], is_return=True,
+                       return_against=receipt.id)
+    rcv.create_receipt(GOODS, [ReceiptLine(GOODS, "SALT-TON", D(3))])
+    svc, args, p = _note(erp, policy, inv.id, 3)
+    note = erp.get_invoice(svc.execute("enter_debit_note", args, p.code).target)
+    again = lambda: _enter(erp, policy, _args(bill="INV-2", lines=[  # noqa: E731
+        {"po": GOODS, "item_code": "SALT-TON", "qty": 3, "rate": 10}]))[2]
+    for state in (DocState.DRAFT, DocState.PENDING, DocState.REJECTED):
+        erp._set(PI, note.id, state)
+        assert _level(again(), "three-way match: quantity") == [BLOCK], state
+    erp._set(PI, note.id, DocState.APPROVED, approver=CTL)
+    assert _level(again(), "three-way match: quantity") == [PASS]
+
+
+def test_draft_credit_on_a_service_allows_no_rebilling(erp, policy):
+    one = [{"po": SVC, "item_code": "CONSULT-HR", "qty": 1, "rate": 500}]
+    inv = _approved(erp, policy, _args(lines=one))
+    svc = as_user(erp, policy, AP)
+    args = {"invoice": inv.id, "lines": [{"item_code": "CONSULT-HR", "qty": 1}],
+            "reason": "session not delivered"}
+    svc.execute("enter_debit_note", args, svc.preview("enter_debit_note", args).code)
+    _, _, p = _enter(erp, policy, _args(bill="INV-2", lines=one))
+    assert _level(p, "three-way match: quantity") == [BLOCK]
+    assert _level(p, "invoice total") == [BLOCK]
 
 
 def test_rebilling_a_credited_service_warns(erp, policy):

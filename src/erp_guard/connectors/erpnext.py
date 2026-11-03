@@ -404,7 +404,8 @@ def _invoice(d: dict, rows: list[dict]) -> Invoice:
                           _dec(r["rate"]), r.get("purchase_receipt") or None) for r in rows),
         approver=d.get("erp_guard_approver") or None, on_hold=bool(d.get("on_hold")),
         is_return=bool(d.get("is_return")), return_against=d.get("return_against") or None,
-        is_paid=bool(d.get("is_paid")), remarks=d.get("remarks") or "")
+        is_paid=bool(d.get("is_paid")), remarks=d.get("remarks") or "",
+        posted=_date(d["posting_date"]) if d.get("posting_date") else None)
 
 
 def _payment(d: dict, rows: list[dict]) -> Payment:

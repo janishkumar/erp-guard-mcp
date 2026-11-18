@@ -3,16 +3,22 @@ Warehouse, and Addresses and Contacts linked to a supplier (docs/design.md, "One
 document type"). Reached through create_document, update_document and, for the change
 requests, workflow_action.
 
-Creating one runs the generic checks plus a duplicate-name warning. A Supplier is created
-only by onboard_supplier, which runs the duplicate-supplier checks.
+Creating one runs the generic checks plus a duplicate warning (a similar name; for an
+Address the same street, city and postcode as another of the supplier's addresses; for a
+Contact the same email). A Supplier is created only by onboard_supplier, which runs the
+duplicate-supplier checks. A new Address or Contact for a supplier is a change to that
+supplier (ERPNext makes a new primary address the supplier's default and turns the old one
+off), so it goes the way of the changes below: a create-type change request with no target
+name, which the approval inserts.
 
 Changing one applies directly unless it changes a field the checks read (CHECK_FIELDS; for
 Address, Contact, Warehouse and Price List, any field). Such a change is blocked while open
 documents reference the record, and otherwise becomes an ERP Guard Change Request, put to
 "Pending Approval" as it's created. The whole update goes into the request, so none of it
 applies until someone else decides: workflow_action("ERP Guard Change Request", <id>,
-"Approve") by a user other than the requester who holds an approval limit in the policy,
-after the open-document check runs again, saves it on the record. "Reject" needs a comment
+"Approve") by a purchase approver (a purchase-order approval limit in the policy) who
+neither asked for it nor made it, on a request nobody else has changed since, saves it on
+the record after the field and open-document checks run again. "Reject" needs a comment
 and changes nothing.
 
 Open documents: for an Item (and an Item Price's item), live purchase orders and draft or
@@ -33,11 +39,13 @@ from rapidfuzz import fuzz, utils
 
 from erp_guard import checks as C
 from erp_guard.connectors.base import ErpError
+from erp_guard.generic import checks as G
 from erp_guard.generic.actions import (
     field_checks,
     field_diff,
     generic_checks,
     meta_of,
+    record_exists,
     same_value,
 )
 from erp_guard.models import LIVE_STATUSES, PurchaseOrder
@@ -56,7 +64,8 @@ ANY = "*"
 # address is the same change as editing its address.
 CHECK_FIELDS: dict[str, frozenset[str]] = {
     "Item": frozenset({"is_stock_item", "stock_uom", "item_group", "disabled"}),
-    "Item Price": frozenset({"price_list_rate"}),
+    "Item Price": frozenset({"price_list_rate", "item_code", "price_list", "uom",
+                             "valid_from", "valid_upto", "supplier"}),
     "Supplier": frozenset({"supplier_name", "tax_id", "disabled", "on_hold",
                            "supplier_primary_address", "supplier_primary_contact"}),
     "Address": frozenset({ANY}),
@@ -231,11 +240,11 @@ def _open_check(svc: Service, doctype: str, name: str, current: dict, fields: di
                  f"{doctype} {name}.")
 
 
-def _fixed_fields(w: Write) -> list[C.CheckResult]:
-    fixed = sorted(FIXED_FIELDS.get(w.doctype, frozenset()) & set(w.fields))
+def _fixed_fields(doctype: str, fields: dict) -> list[C.CheckResult]:
+    fixed = sorted(FIXED_FIELDS.get(doctype, frozenset()) & set(fields))
     if not fixed:
         return []
-    return [_block("fixed fields", f"{', '.join(fixed)} on a {w.doctype} is set when it is "
+    return [_block("fixed fields", f"{', '.join(fixed)} on a {doctype} is set when it is "
                    "onboarded and never changed.", fields=fixed)]
 
 
@@ -245,10 +254,52 @@ def _similar(a: str, b: str) -> float:
     return fuzz.token_set_ratio(a, b, processor=utils.default_process)
 
 
+def _norm_text(v) -> str:
+    return " ".join(str(v or "").lower().split())
+
+
+def _duplicate_address(svc: Service, fields: dict) -> list[C.CheckResult]:
+    """The same street, city and postcode as another address of a linked supplier."""
+    key = tuple(_norm_text(fields.get(k)) for k in ("address_line1", "city", "pincode"))
+    if not key[0]:
+        return []
+    same = set()
+    for sid in sorted(supplier_links(fields)):
+        rows = svc.erp.find("Address", [["Dynamic Link", "link_doctype", "=", "Supplier"],
+                                        ["Dynamic Link", "link_name", "=", sid]],
+                            ["name", "address_line1", "city", "pincode"], None, 0) or []
+        same |= {r["name"] for r in rows if tuple(_norm_text(r.get(k)) for k in (
+            "address_line1", "city", "pincode")) == key}
+    if same:
+        return [C.CheckResult("duplicate address", C.WARN,
+                              f"The supplier already has this address: {', '.join(sorted(same))}. "
+                              "Use that one if it's the same place.",
+                              {"existing": sorted(same)})]
+    return [_pass("duplicate address", "No other address of the supplier is the same.")]
+
+
+def _duplicate_contact(svc: Service, fields: dict) -> list[C.CheckResult]:
+    """A contact with the same email address (case-insensitive)."""
+    email = _norm_text(fields.get("email_id"))
+    if not email:
+        return []
+    rows = svc.erp.find("Contact", [], ["name", "email_id"], None, 0) or []
+    same = sorted(r["name"] for r in rows if _norm_text(r.get("email_id")) == email)
+    if same:
+        return [C.CheckResult("duplicate contact", C.WARN,
+                              f"{fields['email_id']} is already the email of {', '.join(same)}. "
+                              "Use that contact if it's the same person.", {"existing": same})]
+    return [_pass("duplicate contact", f"No contact has the email {fields['email_id']}.")]
+
+
 def _duplicate_name(svc: Service, w: Write) -> list[C.CheckResult]:
     """Warn when the new record's name is close to an existing one's (token-set ratio at
     the policy's duplicate-supplier warning threshold); an Item Price when the item already
-    has a price on that price list."""
+    has a price on that price list; an Address or Contact as above."""
+    if w.doctype == "Address":
+        return _duplicate_address(svc, w.fields)
+    if w.doctype == "Contact":
+        return _duplicate_contact(svc, w.fields)
     if w.doctype == "Item Price":
         item, plist = w.fields.get("item_code"), w.fields.get("price_list")
         if not (isinstance(item, str) and isinstance(plist, str)):
@@ -283,10 +334,30 @@ def _duplicate_name(svc: Service, w: Write) -> list[C.CheckResult]:
 def evaluate_create(svc: Service, w: Write) -> Result:
     meta, _ = meta_of(svc, w.doctype)
     summary, res = generic_checks(svc, meta, w)
-    return summary, res + _fixed_fields(w) + _duplicate_name(svc, w)
+    res += _fixed_fields(w.doctype, w.fields) + _duplicate_name(svc, w)
+    if w.doctype not in SUPPLIER_LINKED:
+        return summary, res
+    if (bad := _unsupported(svc)):
+        return summary, res + bad
+    suppliers = ", ".join(sorted(supplier_links(w.fields)))
+    res.append(_open_check(svc, w.doctype, "(new)", {}, w.fields, applying=False))
+    res.append(_pass("second person",
+                     f"A new {w.doctype} for {suppliers} changes where and to whom the "
+                     "supplier's business goes, so it waits for a second person: it is "
+                     "recorded as a change request and created only when someone else with a "
+                     "purchase approval limit approves it."))
+    return (summary + " Recorded as a change request for a second person; nothing is created "
+            "until it is approved."), res
 
 
 def apply_create(svc: Service, w: Write) -> tuple[str, str]:
+    if w.doctype in SUPPLIER_LINKED:
+        cr = svc.erp.create_change_request(w.doctype, "", w.fields)
+        return cr, (f"Change request {cr} for a new {w.doctype} of "
+                    f"{', '.join(sorted(supplier_links(w.fields)))} is waiting for a second "
+                    "person; nothing has been created yet. Someone else with a purchase "
+                    f"approval limit creates it with workflow_action(\"{CHANGE_REQUEST}\", "
+                    f"\"{cr}\", \"Approve\").")
     doc = svc.erp.insert({**w.fields, "doctype": w.doctype})
     return doc["name"], f"{w.doctype} {doc['name']} created."
 
@@ -299,7 +370,7 @@ def evaluate_update(svc: Service, w: Write) -> Result:
     current = svc.erp.get_doc(w.doctype, w.name)
     if current is None:  # the generic checks already say so
         return summary, res
-    res += _fixed_fields(w)
+    res += _fixed_fields(w.doctype, w.fields)
     changed = changed_check_fields(w.doctype, current, w.fields)
     if not changed:
         return summary, res + [_pass("master data", "No field the purchase-to-pay checks "
@@ -311,8 +382,8 @@ def evaluate_update(svc: Service, w: Write) -> Result:
     res.append(_pass("second person",
                      f"The purchase-to-pay checks read {', '.join(changed)} on a {w.doctype}, "
                      "so this change waits for a second person: it is recorded as a change "
-                     "request and applied only when someone else with an approval limit "
-                     "approves it."))
+                     "request and applied only when someone else with a purchase approval "
+                     "limit approves it."))
     return (summary + " Recorded as a change request for a second person; nothing changes "
             "until it is approved."), res
 
@@ -325,7 +396,8 @@ def apply_update(svc: Service, w: Write) -> tuple[str, str]:
         cr = svc.erp.create_change_request(w.doctype, w.name, w.fields)
         return cr, (f"Change request {cr} for {w.doctype} {w.name} "
                     f"({', '.join(sorted(w.fields))}) is waiting for a second person; nothing "
-                    f"has changed yet. Someone else with an approval limit applies it with "
+                    f"has changed yet. Someone else with a purchase approval limit applies it "
+                    f"with "
                     f"workflow_action(\"{CHANGE_REQUEST}\", \"{cr}\", \"Approve\").")
     svc.erp.save({**current, **w.fields})
     return w.name, f"{w.doctype} {w.name} updated."
@@ -334,12 +406,14 @@ def apply_update(svc: Service, w: Write) -> tuple[str, str]:
 # --- deciding a change request (workflow_action) ---------------------------------------
 
 def _is_approver(svc: Service, user: str) -> bool:
-    return any(svc.policy.approver_limit(user, kind) is not None for kind in svc.policy.approval)
+    """Change requests are decided by purchase approvers (a purchase-order approval limit)."""
+    return svc.policy.approver_limit(user, "purchase_order") is not None
 
 
 def _requested(cr: dict) -> tuple[str, str, dict] | str:
-    """(target type, target name, fields) of a change request, or what's wrong with it."""
-    target_dt, target = cr.get("target_doctype"), cr.get("target_name")
+    """(target type, target name, fields) of a change request, or what's wrong with it. An
+    empty target name asks for a new supplier Address or Contact."""
+    target_dt, target = cr.get("target_doctype"), cr.get("target_name") or ""
     if target_dt not in MASTERS:
         return (f"it targets {target_dt}, which isn't master data the purchase-to-pay pack "
                 "changes through change requests")
@@ -348,8 +422,25 @@ def _requested(cr: dict) -> tuple[str, str, dict] | str:
     except ValueError:
         return "its requested values aren't readable"
     if not isinstance(fields, dict) or not fields or not isinstance(target, str):
-        return "it names no record or no values"
+        return "it names no values"
+    if not target and (target_dt not in SUPPLIER_LINKED or not supplier_links(fields)):
+        return (f"it names no {target_dt}; only a new Address or Contact linked to a supplier "
+                "is created through a change request")
     return target_dt, target, fields
+
+
+def _decider(actor: str, cr: dict, ref: str) -> C.CheckResult:
+    by, maker = cr.get("requested_by") or "", cr.get("owner") or ""
+    if actor in (by, maker):
+        return _block("second person", f"{actor} asked for this change and can't also "
+                      "decide it. Someone else with a purchase approval limit has to.",
+                      requested_by=by, owner=maker)
+    changed_by = cr.get("modified_by") or ""
+    if changed_by and changed_by != by:
+        return _block("second person", f"Change request {ref} was changed by {changed_by} "
+                      f"after {by} submitted it, so it isn't what {by} asked for. Reject it "
+                      "and ask again.", modified_by=changed_by)
+    return _pass("second person", f"{actor} isn't {by}, who asked.")
 
 
 def evaluate_decision(svc: Service, w: Write) -> Result:
@@ -373,6 +464,7 @@ def evaluate_decision(svc: Service, w: Write) -> Result:
                                 f"here: {requested}.")]
     target_dt, target, fields = requested
     by = cr.get("requested_by") or cr.get("owner") or ""
+    creating = not target
     res = []
     state = cr.get("workflow_state") or "Draft"
     if (cr.get("docstatus"), state) != (0, "Pending Approval"):
@@ -381,32 +473,30 @@ def evaluate_decision(svc: Service, w: Write) -> Result:
                           "pending one is decided."))
     else:
         res.append(_pass("change request", f"Change request {ref} is pending approval."))
-    if actor == by:
-        res.append(_block("second person", f"{actor} asked for this change and can't also "
-                          "decide it. Someone else with an approval limit has to.",
-                          requested_by=by))
-    elif not _is_approver(svc, actor):
-        res.append(_block("second person", f"Only approvers (users with an approval limit in "
-                          f"the policy) decide change requests; {actor} isn't one."))
-    else:
-        res.append(_pass("second person", f"{actor} isn't {by}, who asked, and is an "
-                         "approver."))
+    res.append(_decider(actor, cr, ref))
+    if not _is_approver(svc, actor):
+        res.append(_block("approver", f"Only purchase approvers (a purchase-order approval "
+                          f"limit in the policy) decide change requests; {actor} isn't one."))
     meta, _ = meta_of(svc, target_dt)
-    current = svc.erp.get_doc(target_dt, target)
+    current = None if creating else svc.erp.get_doc(target_dt, target)
     diff = "; ".join(field_diff(meta, current, fields)) or "no field changes"
-    summary = (f"{action} change request {ref} from {by}: {target_dt} {target}: {diff}."
-               + (" It is saved on the record." if action == APPROVE else
-                  " Nothing changes."))
+    what = f"a new {target_dt}" if creating else f"{target_dt} {target}"
+    summary = (f"{action} change request {ref} from {by}: {what}: {diff}."
+               + ((" It is created." if creating else " It is saved on the record.")
+                  if action == APPROVE else " Nothing changes."))
     if action == REJECT:
         if not w.reason:
             res.append(_block("reason", "Rejecting a change request needs a comment saying "
                               "why."))
         return summary, res
-    if current is None:
+    if current is None and not creating:
         return summary, res + [_block("change request", f"No {target_dt} '{target}' any "
                                       "more.")]
-    res += field_checks(meta, fields, for_create=False, required=False)
-    res.append(_open_check(svc, target_dt, target, current, fields, applying=True))
+    res += field_checks(meta, fields, for_create=creating, required=creating)
+    res += G.links_exist(meta, fields, record_exists(svc))
+    res += _fixed_fields(target_dt, fields)
+    res.append(_open_check(svc, target_dt, target or "(new)", current or {}, fields,
+                           applying=True))
     return summary, res
 
 
@@ -414,5 +504,7 @@ def apply_decision(svc: Service, w: Write) -> tuple[str, str]:
     approve = w.action == APPROVE
     svc.erp.apply_change_request(w.name, approve, w.reason)
     if approve:
-        return w.name, f"Change request {w.name} approved and applied."
+        cr = svc.erp.get_doc(CHANGE_REQUEST, w.name) or {}
+        return w.name, (f"Change request {w.name} approved and applied to "
+                        f"{cr.get('target_doctype')} {cr.get('target_name')}.")
     return w.name, f"Change request {w.name} rejected; nothing changed. Reason: {w.reason}"

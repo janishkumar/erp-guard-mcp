@@ -1192,19 +1192,22 @@ class ErpNext:
         return self.get_order(po)
 
     def create_change_request(self, target_doctype, target_name, fields):
-        """An ERP Guard Change Request, submitted for approval by a second person. Bank
-        details are refused here, as on any write."""
+        """An ERP Guard Change Request, submitted for approval by a second person. With an
+        empty target name it asks for a new document of the type. Bank details are refused
+        here, as on any write."""
         self.c._check_bank(fields, target_doctype)
-        self._require(target_doctype, target_name)
+        if target_name:
+            self._require(target_doctype, target_name)
         doc = self.insert({"doctype": CHANGE_REQUEST, "target_doctype": target_doctype,
-                           "target_name": target_name,
+                           "target_name": target_name or "",
                            "fields_json": json.dumps(_plain(fields), sort_keys=True),
                            "requested_by": self.whoami()})
         self.apply_workflow(CHANGE_REQUEST, doc["name"], SUBMIT_FOR_APPROVAL)
         return doc["name"]
 
     def apply_change_request(self, id, approve, reason=""):
-        """Approve: the change is saved on the target document first; only then does the
+        """Approve: the change is saved on the target document first (a request with no
+        target inserts the new document, whose name becomes the target); only then does the
         workflow approve (submit) the request, which is marked Applied. If the target can't
         be saved, the request stays pending and the error is raised. Reject: the workflow
         rejects it and it is marked Rejected. Either way it records who decided, and why if
@@ -1212,11 +1215,17 @@ class ErpNext:
         cr = self._require(CHANGE_REQUEST, id)
         if (cr.get("docstatus"), cr.get("workflow_state")) != (0, "Pending Approval"):
             raise ErpError(f"Change request {id} isn't pending")
-        if approve:
+        made = None
+        if approve and cr.get("target_name"):
             target = self._require(cr["target_doctype"], cr["target_name"])
             self.save({**target, **json.loads(cr["fields_json"])})
+        elif approve:
+            made = self.insert({**json.loads(cr["fields_json"]),
+                                "doctype": cr["target_doctype"]})["name"]
         self.apply_workflow(CHANGE_REQUEST, id, APPROVE if approve else REJECT)
         body = {"status": "Applied" if approve else "Rejected", "decided_by": self.whoami()}
+        if made:
+            body["target_name"] = made
         if reason:
             body["reason"] = reason
         self.c.request("PUT", _res(CHANGE_REQUEST, id), body=body)

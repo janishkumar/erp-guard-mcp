@@ -462,8 +462,8 @@ class MemoryErp:
         bank = sorted(k for k in fields if BANK_KEY.search(k))
         if bank:
             raise ErpError(f"bank details are never written: {bank}")
-        if target_doctype == "Item" and target_name not in self.items or \
-                target_doctype == "Supplier" and target_name not in self.suppliers:
+        if target_name and (target_doctype == "Item" and target_name not in self.items or
+                            target_doctype == "Supplier" and target_name not in self.suppliers):
             raise ErpError(f"No {target_doctype} {target_name}")
         cid = self._next("ECR")
         self.change_requests[cid] = {
@@ -478,8 +478,11 @@ class MemoryErp:
         rec = self._get("ERP Guard Change Request", id)
         if rec["state"] != DocState.PENDING:
             raise ErpError(f"Change request {id} isn't pending ({rec['state'].value})")
-        if approve:
+        if approve and rec["target_name"]:
             self._apply_master(rec["target_doctype"], rec["target_name"], rec["fields"])
+        elif approve:  # a new document: kept with its fields under a new name
+            rec["target_name"] = self._next(rec["target_doctype"].upper().replace(" ", "-"))
+            self._keep(rec["target_doctype"], rec["target_name"], **rec["fields"])
         rec.update(state=DocState.APPROVED if approve else DocState.REJECTED,
                    status="Applied" if approve else "Rejected", decided_by=self.user,
                    reason=reason)

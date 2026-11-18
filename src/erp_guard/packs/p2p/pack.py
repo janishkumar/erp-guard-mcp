@@ -139,6 +139,9 @@ class P2PPack:
         "Supplier Quotation": ("enter_supplier_quote",),
         "Supplier": ("onboard_supplier",),
     }
+    ownership_notes: dict[str, str] = {
+        dt: "Owned by the purchase-to-pay pack only when linked to a Supplier; otherwise the "
+            "generic checks apply." for dt in masters.SUPPLIER_LINKED}
 
     def owns(self, doctype: str) -> bool:
         return doctype in P2P_OWNED

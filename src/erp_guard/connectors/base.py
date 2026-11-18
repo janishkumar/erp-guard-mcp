@@ -149,11 +149,13 @@ class P2PConnector(ErpConnector, Protocol):
     def close_order(self, po: str, reason: str) -> PurchaseOrder: ...
     def create_change_request(self, target_doctype: str, target_name: str,
                               fields: dict) -> str:
-        """Record a change to master data for a second person, pending approval."""
+        """Record a change to master data for a second person, pending approval. An empty
+        `target_name` asks for a new document: `fields` is the whole of it."""
         ...
     def apply_change_request(self, id: str, approve: bool, reason: str = "") -> None:
-        """Approve (and apply) or reject a pending change request, with the decider's
-        reason or comment, if any, kept on the request."""
+        """Approve (and apply: save the change, or insert the new document and record its
+        name as the target) or reject a pending change request, with the decider's reason
+        or comment, if any, kept on the request."""
         ...
 
 

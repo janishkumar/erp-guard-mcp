@@ -15,6 +15,8 @@ class Pack(Protocol):
     name: str
     # Task tools by the document type they work on, preferred over the generic tools.
     task_tools: dict[str, tuple[str, ...]]
+    # Document types owned only in some cases: when, for describe_doctype.
+    ownership_notes: dict[str, str]
 
     def owns(self, doctype: str) -> bool:
         """True if writes to this document type must go through this pack's checks."""

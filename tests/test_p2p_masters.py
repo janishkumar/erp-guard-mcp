@@ -125,12 +125,37 @@ def test_change_request_self_approve_blocked(svc, fake, policy):
     p = svc.preview("workflow_action", decide(cr, "Approve"))
     assert p.blocked and p.code is None
     assert by_check(p, "second person")[0].level == BLOCK
-    # Someone else, but without an approval limit, can't decide it either.
+    # Someone else, but without a purchase approval limit, can't decide it either.
     other = as_user(fake, policy, REQ2)
     p = other.preview("workflow_action", decide(cr, "Approve"))
-    block = by_check(p, "second person")[0]
-    assert block.level == BLOCK and "approval limit" in block.message
+    block = by_check(p, "approver")[0]
+    assert block.level == BLOCK and "purchase approvers" in block.message
     assert fake.docs[(CR, cr)]["workflow_state"] == "Pending Approval"
+    # Nor can the person who made the request, whoever it names as requester.
+    fake.docs[(CR, cr)]["requested_by"] = REQ2
+    p = as_user(fake, policy, REQ).preview("workflow_action", decide(cr, "Approve"))
+    assert p.blocked and by_check(p, "second person")[0].level == BLOCK
+
+
+def test_change_request_changed_after_submission_blocked(svc, fake, policy):
+    cr = make_cr(svc, fake)
+    fake.docs[(CR, cr)].update(modified_by=REQ, fields_json='{"is_stock_item": "0"}')
+    assert as_user(fake, policy, MGR).preview("workflow_action", decide(cr, "Approve")).code
+    fake.docs[(CR, cr)].update(modified_by=REQ2, fields_json='{"disabled": "1"}')
+    p = as_user(fake, policy, MGR).preview("workflow_action", decide(cr, "Approve"))
+    block = by_check(p, "second person")[0]
+    assert p.blocked and block.level == BLOCK and "changed by" in block.message
+
+
+def test_change_request_approval_rechecks_fields(svc, fake, policy):
+    cr = make_cr(svc, fake, "Supplier", "TRANE U.S. INC", on_hold=1)
+    mgr = as_user(fake, policy, MGR)
+    for fields, check in (('{"erp_guard_onboarded_by": "manager@example.com"}', "fixed fields"),
+                          ('{"supplier_primary_address": "NOPE"}', "links"),
+                          ('{"default_bank_account": "x"}', "bank details")):
+        fake.docs[(CR, cr)]["fields_json"] = fields
+        p = mgr.preview("workflow_action", decide(cr, "Approve"))
+        assert p.blocked and by_check(p, check)[0].level == BLOCK, check
 
 
 def test_change_request_approve_applies(svc, fake, policy):
@@ -164,17 +189,20 @@ def test_change_request_approval_rechecks_open_documents(svc, fake, policy):
 
 def test_change_request_reject_needs_comment(svc, fake, policy):
     cr = make_cr(svc, fake)
-    ctl = as_user(fake, policy, CONTROLLER)  # any approval limit decides
-    p = ctl.preview("workflow_action", decide(cr, "Reject"))
-    assert p.blocked and by_check(p, "reason")[0].level == BLOCK
     args = decide(cr, "Reject", "Toner is stocked in the stores")
-    p = ctl.preview("workflow_action", args)
+    # The controller approves invoices, not purchases: no say on master data.
+    p = as_user(fake, policy, CONTROLLER).preview("workflow_action", args)
+    assert p.blocked and by_check(p, "approver")[0].level == BLOCK
+    mgr = as_user(fake, policy, MGR)
+    p = mgr.preview("workflow_action", decide(cr, "Reject"))
+    assert p.blocked and by_check(p, "reason")[0].level == BLOCK
+    p = mgr.preview("workflow_action", args)
     assert p.code and "Nothing changes" in p.summary
-    out = ctl.execute("workflow_action", args, p.code)
+    out = mgr.execute("workflow_action", args, p.code)
     assert out.outcome == "written", out.message
     doc = fake.docs[(CR, cr)]
     assert (doc["workflow_state"], doc["status"], doc["decided_by"], doc["reason"]) == (
-        "Rejected", "Rejected", CONTROLLER, "Toner is stocked in the stores")
+        "Rejected", "Rejected", MGR, "Toner is stocked in the stores")
     assert fake.docs[("Item", "TONER-K")]["is_stock_item"] == 1
 
 
@@ -245,8 +273,8 @@ def test_address_not_linked_to_a_supplier_is_generic(svc, fake):
     p = svc.preview("update_document", update("Address", "Depot-Office", links=link))
     assert p.code and by_check(p, "scope")[0].evidence == {"scope": "pack"}
     assert by_check(p, "second person")[0].level == PASS
-    # Creating one: linked to a supplier, the pack's (generic checks + duplicate name
-    # rule); not linked, generic.
+    # Creating one: linked to a supplier, the pack's (a change request); not linked,
+    # generic.
     new = {"address_title": "New", "address_type": "Billing", "address_line1": "3 Rd",
            "city": "Chicago", "country": "United States"}
     p = svc.preview("create_document", {"doctype": "Address", "fields": {**new, "links": link}})
@@ -332,3 +360,83 @@ def test_unreadable_documents_warn_on_request_and_block_on_approval(svc, fake, p
     block = by_check(p, "open documents")[0]
     assert p.blocked and block.level == BLOCK and "can't read payments" in block.message
     assert as_user(fake, policy, MGR).preview("workflow_action", decide(cr, "Approve")).code
+
+
+def new_address(sup="MORTON SALT INC", **kw):
+    return {"doctype": "Address", "fields": {
+        "address_title": "Remit", "address_type": "Billing", "address_line1": "77 New Rd",
+        "city": "Chicago", "country": "United States", "is_primary_address": 1,
+        "links": [{"link_doctype": "Supplier", "link_name": sup}], **kw}}
+
+
+def test_new_supplier_address_is_a_change_request(svc, fake, policy):
+    args = new_address()
+    # MORTON has an unpaid invoice: a new primary address would redirect it.
+    p = svc.preview("create_document", args)
+    assert p.blocked and "unpaid invoice PI-1" in by_check(p, "open documents")[0].message
+    fake.docs[("Purchase Invoice", "PI-1")]["outstanding_amount"] = 0
+    p = svc.preview("create_document", args)
+    assert p.code and "change request" in p.summary
+    out = svc.execute("create_document", args, p.code)
+    assert out.outcome == "written", out.message
+    cr = fake.docs[(CR, out.target)]
+    assert (cr["target_doctype"], cr["target_name"], cr["workflow_state"]) == (
+        "Address", "", "Pending Approval")
+    assert json.loads(cr["fields_json"])["address_line1"] == "77 New Rd"
+    before = {d["name"] for d in fake.of("Address")}
+    assert fake.method_calls("frappe.client.insert")[-1]["doc"]["doctype"] == CR
+
+    mgr = as_user(fake, policy, MGR)
+    assert svc.preview("workflow_action", decide(out.target, "Approve")).blocked  # own
+    fake.docs[("Purchase Invoice", "PI-1")]["outstanding_amount"] = 420  # open again
+    p = mgr.preview("workflow_action", decide(out.target, "Approve"))
+    assert p.blocked and "unpaid invoice PI-1" in by_check(p, "open documents")[0].message
+    fake.docs[("Purchase Invoice", "PI-1")]["outstanding_amount"] = 0  # paid
+    p = mgr.preview("workflow_action", decide(out.target, "Approve"))
+    assert p.code and "a new Address" in p.summary and "It is created" in p.summary
+    done = mgr.execute("workflow_action", decide(out.target, "Approve"), p.code)
+    assert done.outcome == "written", done.message
+    made = {d["name"] for d in fake.of("Address")} - before
+    assert len(made) == 1
+    cr = fake.docs[(CR, out.target)]
+    assert (cr["status"], cr["target_name"]) == ("Applied", made.pop())
+    assert fake.docs[("Address", cr["target_name"])]["address_line1"] == "77 New Rd"
+
+
+def test_new_supplier_address_refuses_bank_details(svc, fake):
+    p = svc.preview("create_document", new_address("TRANE U.S. INC",
+                                                   address_line2="IBAN DE89370400440532013000"))
+    assert p.blocked and by_check(p, "bank details")[0].level == BLOCK
+
+
+def test_duplicate_address_and_contact_warn(svc, fake):
+    # The same street, city and postcode as the supplier's billing address, spelled
+    # differently.
+    p = svc.preview("create_document", new_address("TRANE U.S. INC", address_line1="1  MAIN st",
+                                                   city="chicago "))
+    warn = by_check(p, "duplicate address")[0]
+    assert warn.level == WARN and "TRANE-Billing" in warn.message and p.code
+    p = svc.preview("create_document", new_address("TRANE U.S. INC"))
+    assert by_check(p, "duplicate address")[0].level == PASS
+    fake.add({"doctype": "Contact", "name": "Pat Lee", "first_name": "Pat",
+              "email_id": "pat.lee@example.com", "links": []})
+    contact = {"doctype": "Contact", "fields": {
+        "first_name": "Patricia", "email_id": "Pat.Lee@Example.com",
+        "links": [{"link_doctype": "Supplier", "link_name": "TRANE U.S. INC"}]}}
+    p = svc.preview("create_document", contact)
+    warn = by_check(p, "duplicate contact")[0]
+    assert warn.level == WARN and "Pat Lee" in warn.message and p.code
+    contact["fields"]["email_id"] = "someone.else@example.com"
+    assert by_check(svc.preview("create_document", contact), "duplicate contact")[0].level \
+        == PASS
+
+
+def test_item_price_item_and_unit_changes_need_a_second_person(svc, fake):
+    fake.add({"doctype": "Price List", "name": "Standard Buying"})
+    fake.add({"doctype": "UOM", "name": "Box"})
+    fake.add({"doctype": "Item Price", "name": "IP-2", "item_code": "TONER-K",
+              "price_list": "Standard Buying", "price_list_rate": 88, "uom": "Nos"})
+    p = svc.preview("update_document", update("Item Price", "IP-2", uom="Box"))
+    assert p.code and by_check(p, "second person")[0].level == PASS
+    p = svc.preview("update_document", update("Item Price", "IP-2", note="x"))
+    assert p.code and by_check(p, "master data")[0].level == PASS

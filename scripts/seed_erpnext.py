@@ -54,9 +54,10 @@ SUPPLIER_GROUP = "Demo Suppliers"
 ITEM_GROUP = "Demo Purchases"
 AUDIT = "ERP Guard Audit"
 CHANGE_REQUEST = "ERP Guard Change Request"
-# Who submits change requests for approval, and who approves or rejects them.
+# Who submits change requests for approval, and who approves or rejects them (erp-guard
+# lets only purchase approvers decide).
 CR_SUBMITTERS = ("Purchase User", "Accounts User")
-CR_APPROVERS = ("Purchase Manager", "Accounts Manager")
+CR_APPROVERS = ("Purchase Manager",)
 HISTORY_NOTE = "Seed history (synthetic)."
 TODAY = date.today()
 
@@ -228,8 +229,9 @@ def change_request_doctype(a: Admin) -> None:
     Business roles create and read change requests and can't delete them. The workflow
     needs a little more, because ERPNext saves a document as the user who applies a
     transition and submits it on approval: the submitting roles (Purchase User, and Accounts
-    User for AP and treasury) also write, and the approving roles (Purchase Manager, and
-    Accounts Manager for the controller) write and submit.
+    User for AP and treasury) also write, and the approving role (Purchase Manager) writes
+    and submits. A request for a new supplier address or contact has no target name until
+    it is approved, when the new document's name is recorded.
     """
     grants = {r: ("read", "create") for r in BUSINESS_ROLES}
     for role in CR_SUBMITTERS:
@@ -245,7 +247,8 @@ def change_request_doctype(a: Admin) -> None:
             {"fieldname": "target_doctype", "fieldtype": "Link", "options": "DocType",
              "label": "Document type", "reqd": 1, "in_list_view": 1},
             {"fieldname": "target_name", "fieldtype": "Dynamic Link",
-             "options": "target_doctype", "label": "Document", "reqd": 1, "in_list_view": 1},
+             "options": "target_doctype", "label": "Document", "allow_on_submit": 1,
+             "in_list_view": 1},
             {"fieldname": "fields_json", "fieldtype": "Long Text", "reqd": 1,
              "label": "Requested field values (JSON)"},
             {"fieldname": "requested_by", "fieldtype": "Data", "label": "Requested by",
@@ -531,8 +534,8 @@ def history_documents(a: Admin) -> None:
 # (config/policy.toml); these roles only let the right people apply transitions.
 # Invoices: the controller (Accounts Manager), and the director as backup (Purchase
 # Manager; policy refuses the manager).
-# Change requests to master data: requesters, AP and treasury ask; any approver (purchase
-# approvers and the controller) decides, never the person who asked (erp-guard's checks).
+# Change requests to master data: requesters, AP and treasury ask; a purchase approver
+# decides, never the person who asked (erp-guard's checks).
 WORKFLOWS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "Material Request": (("Purchase User",), ("Purchase Manager",)),
     "Purchase Order": (("Purchase User",), ("Purchase Manager",)),

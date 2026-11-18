@@ -203,7 +203,9 @@ def describe_doctype(doctype: str) -> str:
         scope = generic.scope_of(svc, meta)
         pack = svc.pack_for(doctype)
         tools = pack.task_tools.get(doctype, ()) if pack else ()
-        return render.doctype(meta, raw, scope, generic.scope_message(meta, scope),
+        note = pack.ownership_notes.get(doctype) if pack else None
+        return render.doctype(meta, raw, scope, generic.scope_message(meta, scope)
+                              + (f" {note}" if note else ""),
                               svc.erp.roles(), pack.name if pack else None, tools)
     return _generic_read(run)
 

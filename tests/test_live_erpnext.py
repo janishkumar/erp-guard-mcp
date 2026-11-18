@@ -1113,8 +1113,10 @@ def test_live_change_request():
     """Master data through the pack. A new item named like an existing one is created with
     a warning (disabled, so it stays out of the catalogue; nothing is deleted). Flipping its
     stock flag waits for a second person: the requester can't approve it, the manager does
-    and it is saved. A change AP asks for, the controller rejects with a comment, and
-    nothing changes. A supplier with live orders keeps its address."""
+    and it is saved. A change AP asks for, the controller can't decide (no purchase approval
+    limit) and the director rejects with a comment: nothing changes. A new address for a
+    supplier with live orders is refused; for a supplier with nothing open it is a
+    create-type change request, and the manager's approval creates it."""
     req2, mgr = svc("REQUESTER2"), svc("MANAGER")
     code = f"LIVE-CR-{uuid.uuid4().hex[:8].upper()}"
     item = {"item_code": code, "item_name": "Copy paper, case (live test)",
@@ -1142,30 +1144,50 @@ def test_live_change_request():
     assert (doc["docstatus"], doc["workflow_state"], doc["status"], doc["decided_by"]) == (
         1, "Approved", "Applied", "manager@example.com")
 
-    ap, ctl = svc("AP"), svc("CONTROLLER")
+    ap, ctl, dir_ = svc("AP"), svc("CONTROLLER"), svc("DIRECTOR")
     p, out = run(ap, "update_document", {"doctype": "Item", "name": code,
                                          "fields": {"is_stock_item": 1}})
     assert out.outcome == "written", out.message
     reject = {"doctype": CR, "name": out.target, "action": "Reject",
               "comment": "Live test: services stay non-stock"}
-    p, out = run(ctl, "workflow_action", reject)
+    assert ctl.preview("workflow_action", reject).blocked
+    p, out = run(dir_, "workflow_action", reject)
     assert out.outcome == "written", out.message
-    doc = ctl.erp.get_doc(CR, reject["name"])
+    doc = dir_.erp.get_doc(CR, reject["name"])
     assert (doc["workflow_state"], doc["status"], doc["decided_by"], doc["reason"]) == (
-        "Rejected", "Rejected", "controller@example.com", reject["comment"])
+        "Rejected", "Rejected", "director@example.com", reject["comment"])
     assert mgr.erp.get_doc("Item", code)["is_stock_item"] == 0
 
-    hist = mgr.erp.find("Purchase Order", [["erp_guard_notes", "=", "Seed history (synthetic)."],
-                                           ["docstatus", "=", 1]], ["supplier"], limit=1)
-    sup = hist[0]["supplier"]
-    address = {"address_title": f"Live CR {code}", "address_type": "Billing",
-               "address_line1": "1 Live Test Way", "city": "Chicago", "country": "United States",
-               "links": [{"link_doctype": "Supplier", "link_name": sup}]}
-    p, out = run(req2, "create_document", {"doctype": "Address", "fields": address})
-    assert out.outcome == "written", out.message
-    assert {r.evidence.get("scope") for r in p.checks if r.check == "scope"} == {"pack"}
-    p = req2.preview("update_document", {"doctype": "Address", "name": out.target,
-                                         "fields": {"address_line1": "2 Elsewhere Rd"}})
+    erp = mgr.erp
+    hist = erp.find("Purchase Order", [["erp_guard_notes", "=", "Seed history (synthetic)."],
+                                       ["docstatus", "=", 1]], ["supplier"], limit=1)
+
+    def address(sup: str) -> dict:
+        return {"doctype": "Address", "fields": {
+            "address_title": f"Live CR {code}", "address_type": "Billing",
+            "address_line1": "1 Live Test Way", "city": "Chicago", "country": "United States",
+            "is_primary_address": 1, "links": [{"link_doctype": "Supplier", "link_name": sup}]}}
+    p = req2.preview("create_document", address(hist[0]["supplier"]))
     assert p.blocked
     assert any(r.check == "open documents" and r.level == "block" and "purchase order"
                in r.message for r in p.checks)
+
+    busy = {o["supplier"] for o in erp.find("Purchase Order", None, ["supplier"], limit=0)}
+    busy |= {i["supplier"] for i in erp.find("Purchase Invoice", None, ["supplier"], limit=0)}
+    busy |= {x["party"] for x in erp.find("Payment Entry", None, ["party"], limit=0)}
+    quiet = next(s.id for s in erp.list_suppliers() if s.id not in busy)
+    p, out = run(req2, "create_document", address(quiet))
+    assert out.outcome == "written", out.message
+    assert {r.evidence.get("scope") for r in p.checks if r.check == "scope"} == {"pack"}
+    doc = erp.get_doc(CR, out.target)
+    assert (doc["target_doctype"], doc["workflow_state"]) == ("Address", "Pending Approval")
+    assert not doc["target_name"]
+    approve = {"doctype": CR, "name": out.target, "action": "Approve"}
+    assert req2.preview("workflow_action", approve).blocked
+    p, done = run(mgr, "workflow_action", approve)
+    assert done.outcome == "written", done.message
+    doc = erp.get_doc(CR, out.target)
+    assert (doc["docstatus"], doc["status"]) == (1, "Applied") and doc["target_name"]
+    made = erp.get_doc("Address", doc["target_name"])
+    assert [(r["link_doctype"], r["link_name"]) for r in made["links"]] == [("Supplier", quiet)]
+    assert made["address_line1"] == "1 Live Test Way"

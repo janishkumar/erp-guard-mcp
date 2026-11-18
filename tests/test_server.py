@@ -69,6 +69,7 @@ def test_generic_read_tools(policy):
         po = server.describe_doctype("Purchase Order")
         assert "purchase-to-pay" in po and "create_purchase_order" in po
         assert "ledger" in server.describe_doctype("Journal Entry")
+        assert "only when linked to a Supplier" in server.describe_doctype("Address")
         assert "system administration" in server.describe_doctype("Server Script")
         assert "ERP error" in server.describe_doctype("No Such Type")
         rows = server.find_documents("Task", [["status", "=", "Open"]], ["name", "subject"])

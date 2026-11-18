@@ -200,7 +200,8 @@ def field_checks(meta: DocMeta, fields: dict, for_create: bool, required: bool =
             *G.instruction_text(meta, fields)]
 
 
-def _exists(svc: Service):
+def record_exists(svc: Service):
+    """(doctype, name) -> whether the record exists and this user can read it."""
     def exists(doctype: str, name: str) -> bool:
         try:
             if doctype == "DocType":
@@ -256,7 +257,7 @@ def generic_checks(svc: Service, meta: DocMeta, w: Write) -> Result:
     res: list[CheckResult] = []
     if w.op in (Op.CREATE, Op.UPDATE, Op.AMEND):
         res += field_checks(meta, w.fields, for_create=w.op is Op.CREATE)
-        res += G.links_exist(meta, w.fields, _exists(svc))
+        res += G.links_exist(meta, w.fields, record_exists(svc))
     if w.op is Op.UPDATE:
         res.append(G.locked(meta, current, w.fields))
     elif w.op is Op.SUBMIT:

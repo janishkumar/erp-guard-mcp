@@ -23,7 +23,8 @@ _NEXT = {"Submit for Approval": ("Pending Approval", 0), "Approve": ("Approved",
 # Child table DocType -> its field on the parent, for list queries that read rows.
 _TABLES = {"Purchase Order Item": "items", "Purchase Receipt Item": "items",
            "Purchase Invoice Item": "items", "Payment Entry Reference": "references",
-           "Material Request Item": "items", "Supplier Quotation Item": "items"}
+           "Material Request Item": "items", "Supplier Quotation Item": "items",
+           "Dynamic Link": "links"}
 _ROW_FIELD = re.compile(r"`tab([^`]+)`\.(\w+) as (\w+)")
 
 

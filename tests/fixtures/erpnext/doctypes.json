@@ -1107,6 +1107,13 @@
    "name": "ERP Guard Audit"
   },
   {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "ERP Guard Change Request"
+  },
+  {
    "is_submittable": 0,
    "issingle": 0,
    "istable": 0,

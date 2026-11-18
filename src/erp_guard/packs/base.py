@@ -20,6 +20,11 @@ class Pack(Protocol):
         """True if writes to this document type must go through this pack's checks."""
         ...
 
+    def owns_write(self, svc: Service, w: Write) -> bool:
+        """For a type it owns: whether this write is the pack's (some types are owned only
+        for some documents). False sends it to the generic checks."""
+        ...
+
     def evaluate_write(self, svc: Service, w: Write) -> tuple[str, list[CheckResult]]:
         """(human summary, check results) for a proposed write. Reads only."""
         ...

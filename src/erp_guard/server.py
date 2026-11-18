@@ -590,7 +590,11 @@ def update_document(doctype: str, name: str, fields: dict,
                     confirmation_code: str | None = None) -> str:
     """Change fields on a draft; on a submitted document only fields ERPNext allows after
     submission. A child table given here replaces the whole table. Prefer a pack's task
-    tool when one exists; this works on anything in scope.
+    tool when one exists; this works on anything in scope. On master data the purchase
+    checks read (an item's stock flag or unit, a supplier's name, tax ID or hold, its
+    addresses and contacts, prices, warehouses, price lists) the change isn't applied: it
+    becomes an "ERP Guard Change Request" that someone else with an approval limit
+    approves with workflow_action, and it is refused while open documents use the record.
 
     Args:
         doctype: ERPNext document type.
@@ -620,7 +624,8 @@ def workflow_action(doctype: str, name: str, action: str, comment: str | None = 
                     confirmation_code: str | None = None) -> str:
     """Apply an ERPNext workflow transition (Approve, Reject, ...) to a document whose type
     has an approval workflow. Prefer a pack's task tool when one exists; this works on
-    anything in scope.
+    anything in scope. Approve or Reject on an "ERP Guard Change Request" decides a
+    master-data change (a rejection needs a comment).
 
     Args:
         doctype: ERPNext document type.

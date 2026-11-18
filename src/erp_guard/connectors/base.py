@@ -151,8 +151,9 @@ class P2PConnector(ErpConnector, Protocol):
                               fields: dict) -> str:
         """Record a change to master data for a second person, pending approval."""
         ...
-    def apply_change_request(self, id: str, approve: bool) -> None:
-        """Approve (and apply) or reject a pending change request."""
+    def apply_change_request(self, id: str, approve: bool, reason: str = "") -> None:
+        """Approve (and apply) or reject a pending change request, with the decider's
+        reason or comment, if any, kept on the request."""
         ...
 
 

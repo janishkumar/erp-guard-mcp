@@ -87,9 +87,15 @@ def meta_of(svc: Service, doctype: str) -> tuple[DocMeta, dict]:
     return doc_meta({"docs": docs}, has_workflow=bool(raw.get("__workflow_docs"))), raw
 
 
-def scope_of(svc: Service, meta: DocMeta) -> Scope:
-    return classify(scope_rules(), meta.doctype, meta.module, meta.issingle,
-                    svc.pack_owned(meta.doctype), meta.is_submittable, istable=meta.istable)
+def scope_of(svc: Service, meta: DocMeta, w: Write | None = None) -> Scope:
+    """The document type's scope; for a write, the pack that owns the type may decide this
+    document isn't its business (e.g. an Address not linked to a supplier), and then the
+    type is classified as if no pack owned it."""
+    owned = svc.pack_owned(meta.doctype)
+    if owned and w is not None:
+        owned = svc.pack_for(meta.doctype).owns_write(svc, w)
+    return classify(scope_rules(), meta.doctype, meta.module, meta.issingle, owned,
+                    meta.is_submittable, istable=meta.istable)
 
 
 def scope_message(meta: DocMeta, scope: Scope) -> str:
@@ -113,6 +119,13 @@ def scope_message(meta: DocMeta, scope: Scope) -> str:
     return f"{meta.doctype} is writable with the generic checks."
 
 
+def _write_scope_message(svc: Service, meta: DocMeta, scope: Scope) -> str:
+    if scope is not Scope.PACK and svc.pack_owned(meta.doctype):
+        return (f"{meta.doctype} is owned by the {svc.pack_for(meta.doctype).name} pack only "
+                "in some cases, and this isn't one; the generic checks apply.")
+    return scope_message(meta, scope)
+
+
 # --- summaries -----------------------------------------------------------------------
 
 def _norm(v):
@@ -131,7 +144,7 @@ def _norm(v):
     return v
 
 
-def _same(old, new) -> bool:
+def same_value(old, new) -> bool:
     return _norm(old) == _norm(new)
 
 
@@ -146,7 +159,7 @@ def _rows_changed(old: list, new: list) -> tuple[int, int, int]:
     """(+added, ~changed, -removed); rows replace the table, so they pair by position."""
     old = [r for r in old if isinstance(r, dict)]
     changed = sum(1 for o, n in zip(old, new, strict=False) if not isinstance(n, dict)
-                  or any(not _same(o.get(k), v) for k, v in n.items()))
+                  or any(not same_value(o.get(k), v) for k, v in n.items()))
     return max(0, len(new) - len(old)), changed, max(0, len(old) - len(new))
 
 
@@ -164,7 +177,7 @@ def field_diff(meta: DocMeta, current: dict | None, fields: dict) -> list[str]:
                 out.append(f"{key}: +{a} rows / ~{c} changed / -{r} removed")
         elif current is None:
             out.append(f"{key}: {_show(new)}")
-        elif not _same(old, new):
+        elif not same_value(old, new):
             out.append(f"{key}: {_show(old)} → {_show(new)}")
     return out
 
@@ -179,8 +192,9 @@ def _label(w: Write) -> str:
     return f"{_VERB[w.op]} {w.doctype}" + (f" {w.name}" if w.name else "") + "."
 
 
-def _field_checks(meta: DocMeta, fields: dict, for_create: bool, required: bool = True
-                  ) -> list[CheckResult]:
+def field_checks(meta: DocMeta, fields: dict, for_create: bool, required: bool = True
+                 ) -> list[CheckResult]:
+    """System fields, bank details, known fields and instruction-like text."""
     return [G.system_fields(fields), G.bank_details(fields),
             *G.known_fields(meta, fields, for_create, required=required),
             *G.instruction_text(meta, fields)]
@@ -189,6 +203,10 @@ def _field_checks(meta: DocMeta, fields: dict, for_create: bool, required: bool 
 def _exists(svc: Service):
     def exists(doctype: str, name: str) -> bool:
         try:
+            if doctype == "DocType":
+                # A link to a document type (an address's link_doctype, say): only System
+                # Manager reads DocType records, so ask for the type's metadata instead.
+                return bool(svc.erp.get_meta(name))
             return svc.erp.get_doc(doctype, name) is not None
         except ErpError:
             return False  # not readable as this user: treated as not there
@@ -227,7 +245,9 @@ def _workflow_checks(svc: Service, meta: DocMeta, w: Write) -> list[CheckResult]
     return [CheckResult("workflow", PASS, f"'{w.action}' is an available action.")]
 
 
-def _generic(svc: Service, meta: DocMeta, w: Write) -> Result:
+def generic_checks(svc: Service, meta: DocMeta, w: Write) -> Result:
+    """(summary, the generic checks) for a write; packs that write a document as given
+    (master data) run these too."""
     current = None
     if w.op is not Op.CREATE:
         current = svc.erp.get_doc(w.doctype, w.name)
@@ -235,7 +255,7 @@ def _generic(svc: Service, meta: DocMeta, w: Write) -> Result:
             return _label(w), [CheckResult("document", BLOCK, f"No {w.doctype} '{w.name}'.")]
     res: list[CheckResult] = []
     if w.op in (Op.CREATE, Op.UPDATE, Op.AMEND):
-        res += _field_checks(meta, w.fields, for_create=w.op is Op.CREATE)
+        res += field_checks(meta, w.fields, for_create=w.op is Op.CREATE)
         res += G.links_exist(meta, w.fields, _exists(svc))
     if w.op is Op.UPDATE:
         res.append(G.locked(meta, current, w.fields))
@@ -279,9 +299,19 @@ def _summary(meta: DocMeta, w: Write, current: dict | None) -> str:
             "cancelled.")
 
 
+# The generic field checks, which a pack's result may also carry when it runs them itself.
+_FIELD_CHECKS = frozenset({"system fields", "bank details", "known fields", "links",
+                           "locked document", "instruction_like_text"})
+
+
 def _dedupe(results: list[CheckResult]) -> list[CheckResult]:
+    """Each result once; a generic field check's pass is dropped where the same check also
+    found something (a pack that ran it with stricter options, say)."""
+    flagged = {r.check for r in results if r.check in _FIELD_CHECKS and r.level != PASS}
     seen, out = set(), []
     for r in results:
+        if r.level == PASS and r.check in flagged:
+            continue
         if (r.check, r.level, r.message) not in seen:
             seen.add((r.check, r.level, r.message))
             out.append(r)
@@ -296,18 +326,22 @@ def evaluate_write(svc: Service, w: Write) -> Result:
     except ErpError as exc:
         return _label(w), [CheckResult("scope", BLOCK,
                                        f"Can't read the metadata of {w.doctype}: {exc}")]
-    scope = scope_of(svc, meta)
+    try:
+        scope = scope_of(svc, meta, w)
+    except ErpError as exc:
+        return _label(w), [CheckResult("scope", BLOCK, f"Can't tell who owns {w.doctype} "
+                                       f"{w.name or ''}: {exc}")]
     head = CheckResult("scope", BLOCK if scope in (Scope.NEVER, Scope.LEDGER) else PASS,
-                       scope_message(meta, scope), {"scope": scope.value})
+                       _write_scope_message(svc, meta, scope), {"scope": scope.value})
     if head.level == BLOCK:
         return _label(w), [head]
     if scope is Scope.PACK:
         summary, res = svc.pack_for(w.doctype).evaluate_write(svc, w)
         if w.op in (Op.CREATE, Op.UPDATE, Op.AMEND):
             # The pack builds the full document, so required fields are its business.
-            res = res + _field_checks(meta, w.fields, for_create=False, required=False)
+            res = res + field_checks(meta, w.fields, for_create=False, required=False)
         return summary, _dedupe([head, *res, *_texts(w)])
-    summary, res = _generic(svc, meta, w)
+    summary, res = generic_checks(svc, meta, w)
     return summary, [head, *res]
 
 
@@ -315,7 +349,7 @@ def evaluate_write(svc: Service, w: Write) -> Result:
 
 def apply_write(svc: Service, w: Write) -> tuple[str, str]:
     meta, _ = meta_of(svc, w.doctype)
-    scope = scope_of(svc, meta)
+    scope = scope_of(svc, meta, w)
     if scope is Scope.PACK:
         return svc.pack_for(w.doctype).apply_write(svc, w)
     if scope not in (Scope.GENERIC, Scope.LATER):  # evaluate blocks these first

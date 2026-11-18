@@ -54,6 +54,9 @@ SUPPLIER_GROUP = "Demo Suppliers"
 ITEM_GROUP = "Demo Purchases"
 AUDIT = "ERP Guard Audit"
 CHANGE_REQUEST = "ERP Guard Change Request"
+# Who submits change requests for approval, and who approves or rejects them.
+CR_SUBMITTERS = ("Purchase User", "Accounts User")
+CR_APPROVERS = ("Purchase Manager", "Accounts Manager")
 HISTORY_NOTE = "Seed history (synthetic)."
 TODAY = date.today()
 
@@ -224,12 +227,15 @@ def change_request_doctype(a: Admin) -> None:
 
     Business roles create and read change requests and can't delete them. The workflow
     needs a little more, because ERPNext saves a document as the user who applies a
-    transition and submits it on approval: the submitting role (Purchase User) also writes,
-    and the approving role (Purchase Manager) writes and submits.
+    transition and submits it on approval: the submitting roles (Purchase User, and Accounts
+    User for AP and treasury) also write, and the approving roles (Purchase Manager, and
+    Accounts Manager for the controller) write and submit.
     """
     grants = {r: ("read", "create") for r in BUSINESS_ROLES}
-    grants["Purchase User"] = ("read", "create", "write")
-    grants["Purchase Manager"] = ("read", "create", "write", "submit")
+    for role in CR_SUBMITTERS:
+        grants[role] = ("read", "create", "write")
+    for role in CR_APPROVERS:
+        grants[role] = ("read", "create", "write", "submit")
     _custom_doctype(a, {
         "name": CHANGE_REQUEST, "autoname": "format:ECR-{#####}", "is_submittable": 1,
         "track_changes": 1, "sort_field": "creation", "sort_order": "DESC",
@@ -327,11 +333,21 @@ def bank(a: Admin) -> None:
 # Read access the design's roles lack in ERPNext but need for their own work:
 # (doctype, role). A receipt reads the company's accounts; submitting an invoice reads its
 # items; invoicing and approving invoices read the order and receipt they match; cancelling
-# a receipt first looks for invoices against it.
+# a receipt first looks for invoices against it; creating an item checks its unit exists.
 READ_GRANTS = [("Account", "Stock User"), ("Purchase Invoice", "Stock User"),
+               ("UOM", "Purchase Master Manager"),
                ("Item", "Accounts Manager"),
                ("Purchase Order", "Accounts User"), ("Purchase Order", "Accounts Manager"),
                ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager")]
+# Master data the requester role creates and edits through erp-guard (in ERPNext only Item
+# Manager writes items); changes the purchase-to-pay checks read still go through a change
+# request a second person approves, and the approver's Purchase Master Manager role saves
+# them. ERPNext already gives the role create and write on Item Price; granted again, so a
+# site where that was taken away gets it back.
+MASTER_GRANTS = [("Item", "Purchase Master Manager", "create"),
+                 ("Item", "Purchase Master Manager", "write"),
+                 ("Item Price", "Purchase Master Manager", "create"),
+                 ("Item Price", "Purchase Master Manager", "write")]
 # Submit rights the requester role lacks: sending a request for quotation and submitting a
 # supplier's quotation (neither has an approval; in ERPNext only Purchase Manager submits a
 # request for quotation by default). No money moves on either.
@@ -363,6 +379,8 @@ def permission_grants(a: Admin) -> None:
         _grant(a, doctype, role, "read")
     for doctype, role in SUBMIT_GRANTS:
         _grant(a, doctype, role, "submit")
+    for doctype, role, ptype in MASTER_GRANTS:
+        _grant(a, doctype, role, ptype)
 
 
 def _works(kv: tuple[str, str], tries: int = 8) -> bool:
@@ -508,17 +526,19 @@ def history_documents(a: Admin) -> None:
     print("history: 6 receipts, 4 invoices, 2 payments")
 
 
-# Approval workflows: doctype -> (role that submits for approval and revises, roles that
+# Approval workflows: doctype -> (roles that submit for approval and revise, roles that
 # approve and reject). Who may approve what, and up to how much, is erp-guard's policy
 # (config/policy.toml); these roles only let the right people apply transitions.
 # Invoices: the controller (Accounts Manager), and the director as backup (Purchase
 # Manager; policy refuses the manager).
-WORKFLOWS = {
-    "Material Request": ("Purchase User", ("Purchase Manager",)),
-    "Purchase Order": ("Purchase User", ("Purchase Manager",)),
-    "Purchase Invoice": ("Accounts User", ("Accounts Manager", "Purchase Manager")),
-    "Payment Entry": ("Accounts User", ("Purchase Manager",)),
-    CHANGE_REQUEST: ("Purchase User", ("Purchase Manager",)),
+# Change requests to master data: requesters, AP and treasury ask; any approver (purchase
+# approvers and the controller) decides, never the person who asked (erp-guard's checks).
+WORKFLOWS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "Material Request": (("Purchase User",), ("Purchase Manager",)),
+    "Purchase Order": (("Purchase User",), ("Purchase Manager",)),
+    "Purchase Invoice": (("Accounts User",), ("Accounts Manager", "Purchase Manager")),
+    "Payment Entry": (("Accounts User",), ("Purchase Manager",)),
+    CHANGE_REQUEST: (CR_SUBMITTERS, CR_APPROVERS),
 }
 STATES = [("Draft", 0), ("Pending Approval", 0), ("Approved", 1), ("Rejected", 0),
           ("Cancelled", 2)]
@@ -539,9 +559,10 @@ ON_ENTER = {(dt, "Approved"): ("erp_guard_approver", "frappe.session.user")
             for dt in ("Purchase Order", "Purchase Invoice", "Payment Entry")}
 
 
-def _workflow(doctype: str, submitter: str, approvers: tuple[str, ...]) -> dict:
-    # The submitter edits drafts and rejected documents, the (first) approver the rest.
-    edits = {"Draft": submitter, "Rejected": submitter}
+def _workflow(doctype: str, submitters: tuple[str, ...], approvers: tuple[str, ...]) -> dict:
+    # The (first) submitter edits drafts and rejected documents, the (first) approver the
+    # rest.
+    edits = {"Draft": submitters[0], "Rejected": submitters[0]}
     states = []
     for st, ds in STATES:
         row = {"state": st, "doc_status": str(ds), "allow_edit": edits.get(st, approvers[0])}
@@ -557,7 +578,7 @@ def _workflow(doctype: str, submitter: str, approvers: tuple[str, ...]) -> dict:
                          "allow_self_approval": 1, "condition": CONDITIONS.get(doctype)}
                         for st, act, nxt, by_approver in
                         TRANSITIONS + EXTRA_TRANSITIONS.get(doctype, [])
-                        for role in (approvers if by_approver else (submitter,))],
+                        for role in (approvers if by_approver else submitters)],
     }
 
 
@@ -568,8 +589,8 @@ def workflows(a: Admin) -> None:
         a.ensure({"doctype": "Workflow State", "workflow_state_name": state}, state)
     for _, action, _, _ in TRANSITIONS + [t for ts in EXTRA_TRANSITIONS.values() for t in ts]:
         a.ensure({"doctype": "Workflow Action Master", "workflow_action_name": action}, action)
-    for doctype, (submitter, approvers) in WORKFLOWS.items():
-        doc = _workflow(doctype, submitter, approvers)
+    for doctype, (submitters, approvers) in WORKFLOWS.items():
+        doc = _workflow(doctype, submitters, approvers)
         name = doc["workflow_name"]
         if a.exists("Workflow", name):
             a.call("PUT", f"/api/resource/Workflow/{httpx.URL(name)}", json=doc)

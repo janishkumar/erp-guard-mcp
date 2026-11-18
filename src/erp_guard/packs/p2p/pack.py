@@ -15,8 +15,13 @@ edits and cancellation run the payment checks (packs.p2p.payments); payments are
 submitting a Request for Quotation or a Supplier Quotation runs the quote checks, as do
 draft edits of requests and quotations and cancelling any of the three
 (packs.p2p.requests); they are raised by `raise_purchase_request`, `request_quotes` and
-`enter_supplier_quote`. Every other operation on a P2P-owned type is refused until its task
-tools land.
+`enter_supplier_quote`. Creating and updating master data (Item, Item Price, Price List,
+Warehouse, a Supplier's details, and Addresses and Contacts linked to a supplier) runs the
+master-data checks, where a change the checks read becomes an ERP Guard Change Request,
+which a second person approves or rejects with workflow_action (packs.p2p.masters); a
+Supplier is created with `onboard_supplier`, and an Address or Contact not linked to a
+supplier is left to the generic checks. Every other operation on a P2P-owned type is
+refused until its task tools land.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from erp_guard.packs.p2p import (
     SUBMIT_FOR_APPROVAL,
     WITHDRAW,
     invoices,
+    masters,
     payments,
     receipts,
     requests,
@@ -73,6 +79,12 @@ _DIRECT = {
     ("Material Request", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
     ("Request for Quotation", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
     ("Supplier Quotation", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
+    (masters.CHANGE_REQUEST, Op.WORKFLOW): (masters.evaluate_decision,
+                                            masters.apply_decision),
+    **{(dt, Op.CREATE): (masters.evaluate_create, masters.apply_create)
+       for dt in masters.MASTERS - {"Supplier"}},
+    **{(dt, Op.UPDATE): (masters.evaluate_update, masters.apply_update)
+       for dt in masters.MASTERS},
 }
 # Unsupported operations whose step has a tool: the refusal names it.
 _INSTEAD = {
@@ -90,6 +102,18 @@ _INSTEAD = {
                                      "workflow_action",
     ("Request for Quotation", Op.CREATE): "ask for quotes with request_quotes",
     ("Supplier Quotation", Op.CREATE): "enter quotes with enter_supplier_quote",
+    ("Supplier", Op.CREATE): "onboard suppliers with onboard_supplier, which runs the "
+                             "duplicate-supplier checks",
+    (masters.CHANGE_REQUEST, Op.CREATE): "change requests are made by update_document on "
+                                         "the record to change",
+    (masters.CHANGE_REQUEST, Op.UPDATE): "a change request isn't edited; reject it with "
+                                         "workflow_action and ask again with update_document",
+    (masters.CHANGE_REQUEST, Op.SUBMIT): "approve or reject it with workflow_action",
+    (masters.CHANGE_REQUEST, Op.CANCEL): "reject it with workflow_action",
+    (masters.CHANGE_REQUEST, Op.AMEND): "ask again with update_document on the record",
+    **{(dt, op): "master data is changed with update_document, not submitted, cancelled "
+                 "or amended"
+       for dt in masters.MASTERS for op in (Op.SUBMIT, Op.WORKFLOW, Op.CANCEL, Op.AMEND)},
 }
 
 
@@ -118,6 +142,9 @@ class P2PPack:
 
     def owns(self, doctype: str) -> bool:
         return doctype in P2P_OWNED
+
+    def owns_write(self, svc: Service, w: Write) -> bool:
+        return masters.owns_write(svc, w)
 
     def _route(self, svc: Service, w: Write) -> tuple[str, dict] | CheckResult:
         """The pack action and its canonical arguments for this write, or why not."""

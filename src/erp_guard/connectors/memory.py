@@ -472,7 +472,7 @@ class MemoryErp:
             "status": "Pending", "decided_by": None}
         return cid
 
-    def apply_change_request(self, id, approve):
+    def apply_change_request(self, id, approve, reason=""):
         """As ERPNext: the change is applied first, and only then is the request approved;
         if applying fails, the request stays pending."""
         rec = self._get("ERP Guard Change Request", id)
@@ -481,7 +481,8 @@ class MemoryErp:
         if approve:
             self._apply_master(rec["target_doctype"], rec["target_name"], rec["fields"])
         rec.update(state=DocState.APPROVED if approve else DocState.REJECTED,
-                   status="Applied" if approve else "Rejected", decided_by=self.user)
+                   status="Applied" if approve else "Rejected", decided_by=self.user,
+                   reason=reason)
 
     def _apply_master(self, doctype: str, name: str, fields: dict) -> None:
         fields = dict(fields)

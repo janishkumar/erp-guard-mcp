@@ -1203,11 +1203,12 @@ class ErpNext:
         self.apply_workflow(CHANGE_REQUEST, doc["name"], SUBMIT_FOR_APPROVAL)
         return doc["name"]
 
-    def apply_change_request(self, id, approve):
+    def apply_change_request(self, id, approve, reason=""):
         """Approve: the change is saved on the target document first; only then does the
         workflow approve (submit) the request, which is marked Applied. If the target can't
         be saved, the request stays pending and the error is raised. Reject: the workflow
-        rejects it and it is marked Rejected. Either way it records who decided."""
+        rejects it and it is marked Rejected. Either way it records who decided, and why if
+        a reason is given."""
         cr = self._require(CHANGE_REQUEST, id)
         if (cr.get("docstatus"), cr.get("workflow_state")) != (0, "Pending Approval"):
             raise ErpError(f"Change request {id} isn't pending")
@@ -1215,5 +1216,7 @@ class ErpNext:
             target = self._require(cr["target_doctype"], cr["target_name"])
             self.save({**target, **json.loads(cr["fields_json"])})
         self.apply_workflow(CHANGE_REQUEST, id, APPROVE if approve else REJECT)
-        self.c.request("PUT", _res(CHANGE_REQUEST, id), body={
-            "status": "Applied" if approve else "Rejected", "decided_by": self.whoami()})
+        body = {"status": "Applied" if approve else "Rejected", "decided_by": self.whoami()}
+        if reason:
+            body["reason"] = reason
+        self.c.request("PUT", _res(CHANGE_REQUEST, id), body=body)

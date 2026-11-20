@@ -145,3 +145,12 @@ def test_from_env_needs_key_for_sandbox(monkeypatch):
     monkeypatch.delenv("SAP_BASE_URL", raising=False)
     with pytest.raises(SystemExit):
         SapS4.from_env()
+
+
+def test_doc_version_is_a_hash_of_the_order(sap):
+    a, b = sap.doc_version("Purchase Order", "4500000101"), \
+        sap.doc_version("Purchase Order", "4500000102")
+    assert a and b and a != b and a == sap.doc_version("Purchase Order", "4500000101")
+    assert sap.doc_version("Purchase Order", "9999999999") == ""
+    with pytest.raises(ErpError, match="doesn't write"):
+        sap.doc_version("Supplier", "17300002")

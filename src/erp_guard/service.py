@@ -107,28 +107,37 @@ def payload_hash(action: str, actor: str, canon: dict) -> str:
 
 # --- confirmation codes --------------------------------------------------------------
 
+STALE = "The document changed after the preview; preview again."
+
+
 @dataclass
 class _Issued:
     action: str
     actor: str
     digest: str
     expires: datetime
+    fingerprint: str = ""
 
 
 class CodeBook:
-    """One-time codes bound to (action, actor, payload hash). Burned on first use."""
+    """One-time codes bound to (action, actor, payload hash) and to the version of the
+    documents the write acts on. Burned on first use."""
 
     def __init__(self, ttl: timedelta, now: Callable[[], datetime] = datetime.now):
         self.ttl, self.now = ttl, now
         self._issued: dict[str, _Issued] = {}
 
-    def issue(self, action: str, actor: str, digest: str) -> str:
+    def issue(self, action: str, actor: str, digest: str, fingerprint: str = "") -> str:
         code = "".join(secrets.choice(_ALPHABET) for _ in range(8))
-        self._issued[code] = _Issued(action, actor, digest, self.now() + self.ttl)
+        self._issued[code] = _Issued(action, actor, digest, self.now() + self.ttl,
+                                     fingerprint)
         return code
 
-    def redeem(self, code: str | None, action: str, actor: str, digest: str) -> str | None:
-        """None if the code is good for exactly this write; otherwise why not."""
+    def redeem(self, code: str | None, action: str, actor: str, digest: str,
+               fingerprint: Callable[[], str] | None = None) -> str | None:
+        """None if the code is good for exactly this write; otherwise why not.
+        `fingerprint` reads the target documents' current version; it is called only for an
+        otherwise good code (the code is burned by then) and may raise ErpError."""
         if not code:
             return "No confirmation code. Call preview first, check the results, then pass " \
                    "the code it returns."
@@ -143,6 +152,8 @@ class CodeBook:
         if issued.digest != digest:
             return "The arguments differ from what was previewed. Preview the exact " \
                    "arguments you intend to write."
+        if fingerprint is not None and fingerprint() != issued.fingerprint:
+            return STALE
         return None
 
 
@@ -182,6 +193,14 @@ class Action:
     evaluate: Callable[[Service, dict], tuple[str, list[C.CheckResult]]]  # reads only
     write: Callable[[Service, dict], tuple[str, str]]  # (target id, message)
     target_key: str | None = None  # canon key naming the target doc
+    # The existing documents the write acts on, as (doctype, name): the code is bound to
+    # their version at preview time.
+    targets: Callable[[dict], list[tuple[str, str]]] | None = None
+
+
+def acts_on(doctype: str, key: str) -> Callable[[dict], list[tuple[str, str]]]:
+    """`targets` for a write on the one document named by canon[key]."""
+    return lambda canon: [(doctype, canon[key])] if canon.get(key) else []
 
 
 def default_actions() -> list[Action]:
@@ -248,14 +267,35 @@ class Service:
         """(human summary, check results) for a proposed write. Reads only."""
         return self.actions[action].evaluate(self, canon)
 
+    def fingerprint(self, action: str, canon: dict) -> str:
+        """The current version of every existing document the write acts on ("" if none):
+        ERPNext's `modified`, the memory ERP's change counter. Reads only."""
+        targets = self.actions[action].targets
+        if targets is None:
+            return ""
+        version = getattr(self.erp, "doc_version", None)
+        if version is None:
+            raise ErpError(f"The {self.erp.name} connector can't tell whether a document "
+                           "changed, so no code is issued for a write on one.")
+        return json.dumps([[dt, name, version(dt, name)] for dt, name in targets(canon)])
+
     # public API -----------------------------------------------------------------------
 
     def preview(self, action: str, args: dict) -> Preview:
         canon = canonical_args(action, args, self.actions)
+        # Read the version first: a change after this point (even during the checks) makes
+        # the code stale rather than binding it to a version the checks didn't see.
+        try:
+            version, unversioned = self.fingerprint(action, canon), None
+        except ErpError as exc:
+            version, unversioned = "", exc
         summary, results = self.evaluate(action, canon)
         code = None
         if not C.blocked(results):
-            code = self.codes.issue(action, self.actor, payload_hash(action, self.actor, canon))
+            if unversioned is not None:
+                raise unversioned  # a code must be bound to the version
+            code = self.codes.issue(action, self.actor, payload_hash(action, self.actor, canon),
+                                    version)
         return Preview(action, canon, summary, results, code)
 
     def execute(self, action: str, args: dict, confirmation_code: str | None) -> Outcome:
@@ -270,11 +310,18 @@ class Service:
         key = self.actions[action].target_key
         target = canon.get(key) if key else None
 
-        why = self.codes.redeem(confirmation_code, action, actor, digest)
-        if why:
-            return self._audit(Outcome(action, "refused", why, target=target), actor, digest)
-
-        _, results = self.evaluate(action, canon)  # fresh data, not the preview's
+        try:
+            why = self.codes.redeem(confirmation_code, action, actor, digest,
+                                    lambda: self.fingerprint(action, canon))
+            if why:
+                return self._audit(Outcome(action, "refused", why, target=target), actor,
+                                   digest)
+            _, results = self.evaluate(action, canon)  # fresh data, not the preview's
+        except Exception as exc:  # the code is burned: audit the failure, never escape
+            what = f"ERP error: {exc}" if isinstance(exc, ErpError) else \
+                f"{type(exc).__name__}: {exc}"
+            return self._audit(Outcome(action, "error", f"Write-time check failed. {what}",
+                                       target=target), actor, digest)
         if C.blocked(results):
             msg = "Blocked at write time: " + " ".join(
                 r.message for r in results if r.level == C.BLOCK)

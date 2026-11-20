@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 Result = tuple[str, list[C.CheckResult]]
 PAYMENT = "Payment Entry"
+INVOICE = "Purchase Invoice"
 WORKFLOW_ACTIONS = (SUBMIT_FOR_APPROVAL, APPROVE, REJECT, REVISE)
 
 
@@ -328,10 +329,15 @@ def apply_cancel(svc: Service, w: Write) -> tuple[str, str]:
 
 # --- the actions -----------------------------------------------------------------------
 
+def _invoices_paid(canon: dict) -> list[tuple[str, str]]:
+    """The code is bound to the version of every invoice the payment pays."""
+    return [(INVOICE, row["invoice"]) for row in canon["invoices"]]
+
+
 ACTIONS: list[Action] = [
     Action("pay_supplier", canonicaliser("pay_supplier", {
         "supplier": lambda a: _text(a, "supplier", required=True, max_len=140),
         "invoices": _allocations,
         "notes": lambda a: _text(a, "notes"),
-    }), _eval_pay, _write_pay),
+    }), _eval_pay, _write_pay, None, _invoices_paid),
 ]

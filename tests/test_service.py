@@ -270,3 +270,49 @@ def test_unknown_item_and_supplier(svc):
 def test_invalid_args_on_execute_are_refused_and_audited(erp, svc):
     out = svc.execute("create_purchase_order", {"supplier": "SUP-HERC"}, "ABCDEFGH")
     assert out.outcome == "refused" and erp.audit[-1].outcome == "refused"
+
+
+# --- codes bind the target document's version ------------------------------------------
+
+def test_code_is_refused_when_the_document_changed_after_preview(erp, svc, policy):
+    """A manager's code for a $900 order can't approve it after the requester withdrew,
+    amended it to $4,750 and resubmitted: the code is bound to the document as previewed."""
+    _, out = run(svc, "create_purchase_order", po_args(qty=10, rate=90, item="TONER-K",
+                                                       supplier="SUP-CANON", cc="IT"))
+    po = out.target
+    run(svc, "submit_for_approval", {"po": po})
+    mgr = as_user(erp, policy, MGR)
+    early = mgr.preview("approve_purchase_order", {"po": po})
+    assert early.code
+    amend = {"po": po, "lines": [{"item_code": "TONER-K", "qty": 50, "rate": 95}]}
+    assert run(svc, "amend_purchase_order", amend)[1].outcome == "written"
+    assert run(svc, "submit_for_approval", {"po": po})[1].outcome == "written"
+    late = mgr.execute("approve_purchase_order", {"po": po}, early.code)
+    assert late.outcome == "refused" and "changed after the preview" in late.message
+    assert erp.get_order(po).status == Status.PENDING and erp.get_order(po).approver is None
+    assert (erp.audit[-1].outcome, erp.audit[-1].target) == ("refused", po)
+    # The code is burned; a fresh preview of the new version works.
+    assert mgr.execute("approve_purchase_order", {"po": po}, early.code).outcome == "refused"
+    assert run(mgr, "approve_purchase_order", {"po": po})[1].outcome == "written"
+
+
+def test_unchanged_document_keeps_its_code(erp, svc, policy):
+    _, out = run(svc, "create_purchase_order", po_args())
+    p = svc.preview("submit_for_approval", {"po": out.target})
+    run(svc, "create_purchase_order", po_args(supplier="SUP-CANON"))  # another document
+    assert svc.execute("submit_for_approval", {"po": out.target}, p.code).outcome == "written"
+
+
+def test_an_erp_error_in_the_write_time_recheck_is_audited(erp, svc):
+    from erp_guard.connectors.base import ErpError
+    _, out = run(svc, "create_purchase_order", po_args())
+    p = svc.preview("submit_for_approval", {"po": out.target})
+    n = len(erp.audit)
+
+    def fail(*a, **k):
+        raise ErpError("403 on read")
+    erp.get_order = fail
+    res = svc.execute("submit_for_approval", {"po": out.target}, p.code)
+    assert res.outcome == "error" and "403 on read" in res.message
+    assert len(erp.audit) == n + 1 and erp.audit[-1].outcome == "error"
+    assert erp.audit[-1].target == out.target

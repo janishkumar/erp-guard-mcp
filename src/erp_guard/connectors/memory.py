@@ -70,6 +70,8 @@ class MemoryErp:
         self.change_requests: dict[str, dict] = {}
         # Fields written that the domain models don't carry (reasons, comments, ...).
         self.extra: dict[tuple[str, str], dict] = {}
+        # (doctype, name) -> change counter, bumped on every change (ERPNext's `modified`).
+        self.versions: dict[tuple[str, str], int] = {}
         self._seq: dict[str, int] = {"SUP": 0, "PO": 0, "AUD": 0}
 
     def as_user(self, user: str) -> MemoryErp:
@@ -78,6 +80,9 @@ class MemoryErp:
         view.__dict__ = self.__dict__.copy()
         view.user = user
         return view
+
+    def _bump(self, doctype: str, id: str) -> None:
+        self.versions[(doctype, id)] = self.versions.get((doctype, id), 0) + 1
 
     def _next(self, kind: str) -> str:
         self._seq[kind] = self._seq.get(kind, 0) + 1
@@ -120,6 +125,9 @@ class MemoryErp:
                     out[ln.item_code] = ln.rate
         return out
 
+    def doc_version(self, doctype: str, name: str) -> str:
+        return str(self.versions.get((doctype, name), 0))
+
     def read_audit(self, target=None, limit=50):
         rows = [a for a in self.audit if target is None or a.target == target]
         return list(reversed(rows))[:limit]
@@ -161,6 +169,7 @@ class MemoryErp:
             raise ErpError(f"No purchase order {order_id}")
         o = dataclasses.replace(self.orders[order_id], **changes)
         self.orders[order_id] = o
+        self._bump("Purchase Order", order_id)
         return o
 
     def set_status(self, order_id, status, reason):
@@ -268,6 +277,7 @@ class MemoryErp:
 
     def _set(self, doctype: str, id: str, state: DocState | None = None, **changes) -> None:
         store, doc = self._store_of(doctype), self._get(doctype, id)
+        self._bump(doctype, id)
         if isinstance(doc, dict):
             doc.update(changes, **({"state": state} if state else {}))
             return
@@ -278,6 +288,7 @@ class MemoryErp:
 
     def _keep(self, doctype: str, id: str, **fields) -> None:
         self.extra.setdefault((doctype, id), {}).update(fields)
+        self._bump(doctype, id)
 
     def create_request(self, cost_centre, lines, notes):
         r = Request(self._next("MR"), self.user, cost_centre, DocState.DRAFT, tuple(lines),
@@ -483,6 +494,7 @@ class MemoryErp:
         elif approve:  # a new document: kept with its fields under a new name
             rec["target_name"] = self._next(rec["target_doctype"].upper().replace(" ", "-"))
             self._keep(rec["target_doctype"], rec["target_name"], **rec["fields"])
+        self._bump("ERP Guard Change Request", id)
         rec.update(state=DocState.APPROVED if approve else DocState.REJECTED,
                    status="Applied" if approve else "Rejected", decided_by=self.user,
                    reason=reason)
@@ -492,6 +504,7 @@ class MemoryErp:
         if doctype == "Supplier" and name not in self.suppliers or \
                 doctype == "Item" and name not in self.items:
             raise ErpError(f"No {doctype} {name}")
+        self._bump(doctype, name)
         if doctype == "Supplier":
             s, ch = self.suppliers[name], {}
             for src, dst, conv in (("supplier_name", "name", str), ("tax_id", "tax_id", str),

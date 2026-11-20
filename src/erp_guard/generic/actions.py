@@ -423,12 +423,17 @@ def _write_of(op: Op):
     return build
 
 
+def _target(canon: dict) -> list[tuple[str, str]]:
+    return [(canon["doctype"], canon["name"])] if canon.get("name") else []
+
+
 def _action(name: str, op: Op, spec: dict) -> Action:
     build = _write_of(op)
+    # A write on an existing document is bound to its version at preview time.
     return Action(name, canonicaliser(name, spec),
                   lambda svc, canon: evaluate_write(svc, build(canon)),
                   lambda svc, canon: apply_write(svc, build(canon)),
-                  "name" if "name" in spec else None)
+                  "name" if "name" in spec else None, _target if "name" in spec else None)
 
 
 ACTIONS: list[Action] = [

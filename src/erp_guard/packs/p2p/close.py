@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from erp_guard import checks as C
 from erp_guard.packs.p2p import checks as P
-from erp_guard.service import Action, _text, canonicaliser
+from erp_guard.service import Action, _text, acts_on, canonicaliser
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -45,5 +45,5 @@ ACTIONS: list[Action] = [
     Action("close_purchase_order", canonicaliser("close_purchase_order", {
         "po": lambda a: _text(a, "po", required=True, max_len=140),
         "reason": lambda a: _text(a, "reason"),
-    }), _eval_close, _write_close, "po"),
+    }), _eval_close, _write_close, "po", acts_on("Purchase Order", "po")),
 ]

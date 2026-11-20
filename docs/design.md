@@ -98,9 +98,9 @@ No demo user holds the CFO tier, so anything above $250K can't be approved in th
 
 ## The write protocol (unchanged)
 
-1. **Preview** (read-only): takes the write tool's name and exact arguments, canonicalises them, runs every check, and returns what would change, each check's result with evidence, and, only if nothing blocks, a one-time code bound to (action, actor, sha256 of the canonical arguments).
-2. **Write** with the code. Codes are 8 characters, single use (burned on any attempt), 15 minutes, in memory.
-3. **Re-check** against fresh ERP data at write time. A code never overrides a block.
+1. **Preview** (read-only): takes the write tool's name and exact arguments, canonicalises them, runs every check, and returns what would change, each check's result with evidence, and, only if nothing blocks, a one-time code bound to (action, actor, sha256 of the canonical arguments) and to the version of every existing document the write acts on (ERPNext's `modified`; the in-memory ERP's change counter; a hash of the order as read on SAP). The version is read before the checks run.
+2. **Write** with the code. Codes are 8 characters, single use (burned on any attempt), 15 minutes, in memory. If a target document changed after the preview, the write is refused ("the document changed after the preview; preview again") and audited, even when the change was undone or the document is back in the state the preview saw.
+3. **Re-check** against fresh ERP data at write time. A code never overrides a block. A failure while re-checking (an ERP error, say) is audited as `error`; nothing is written.
 4. **Audit**: every write-tool call is recorded in the ERP, refused ones included, in a create/read-only custom DocType (`ERP Guard Audit`).
 
 For generic writes the preview's "what would change" is a field-by-field diff against the current document (or the full field list for a new one), with links resolved to names.

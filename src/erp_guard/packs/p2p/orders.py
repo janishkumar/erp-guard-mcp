@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from erp_guard import checks as C
 from erp_guard.models import LIVE_STATUSES, Line, PurchaseOrder, Snapshot, Status
 from erp_guard.packs.p2p import checks as P
-from erp_guard.service import Action, InvalidArgs, _lines, _text, canonicaliser
+from erp_guard.service import Action, InvalidArgs, _lines, _text, acts_on, canonicaliser
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -317,7 +317,9 @@ def _write_amend(svc: Service, canon: dict) -> tuple[str, str]:
 # --- the actions ---------------------------------------------------------------------
 
 def _action(name: str, spec: dict, evaluate, write, target_key: str | None = None) -> Action:
-    return Action(name, canonicaliser(name, spec), evaluate, write, target_key)
+    # A write on an existing order is bound to the order's version at preview time.
+    return Action(name, canonicaliser(name, spec), evaluate, write, target_key,
+                  acts_on("Purchase Order", target_key) if target_key else None)
 
 
 ACTIONS: list[Action] = [

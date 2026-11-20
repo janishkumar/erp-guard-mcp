@@ -39,7 +39,7 @@ from erp_guard.packs.p2p.models import (
     Rfq,
     not_editable,
 )
-from erp_guard.service import Action, InvalidArgs, _decimal, _text, canonicaliser
+from erp_guard.service import Action, InvalidArgs, _decimal, _text, acts_on, canonicaliser
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -512,7 +512,8 @@ ACTIONS: list[Action] = [
     Action("request_quotes", canonicaliser("request_quotes", {
         "request": lambda a: _text(a, "request", required=True, max_len=140),
         "suppliers": _suppliers,
-    }), _eval_request_quotes, _write_request_quotes, "request"),
+    }), _eval_request_quotes, _write_request_quotes, "request",
+        acts_on("Material Request", "request")),
     Action("enter_supplier_quote", canonicaliser("enter_supplier_quote", {
         "supplier": lambda a: _text(a, "supplier", required=True, max_len=140),
         "lines": _item_lines(("qty", "rate")),

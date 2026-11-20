@@ -24,6 +24,7 @@ What S/4HANA does differently from ERPNext, and how this connector handles it:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -180,6 +181,21 @@ class SapS4:
                 return None
             raise
         return self._order(r.json())
+
+    def doc_version(self, doctype: str, name: str) -> str:
+        """A hash of the order as read (header and items, with their ETags); "" if there is
+        no such order. Only purchase orders are written through this connector."""
+        if doctype != "Purchase Order":
+            raise ErpError(f"The SAP connector doesn't write {doctype}")
+        try:
+            r = self.c.request("GET", f"{PO_SERVICE}/PurchaseOrder({_key(name)})",
+                               params={"$expand": self._EXPAND})
+        except ErpError as exc:
+            if " 404 " in str(exc):
+                return ""
+            raise
+        blob = json.dumps(r.json(), sort_keys=True, default=str)
+        return hashlib.sha256(blob.encode()).hexdigest()
 
     def list_orders(self, *, supplier_id=None, cost_centre=None, since=None):
         flt = []

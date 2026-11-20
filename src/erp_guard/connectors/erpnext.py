@@ -573,6 +573,11 @@ class ErpNext:
                 d["name"]: d for d in docs if d["name"] != doctype}}
         return self._meta[doctype]
 
+    def doc_version(self, doctype: str, name: str) -> str:
+        """The document's `modified` timestamp ("" if there is no such document)."""
+        rows = self.find(doctype, [["name", "=", name]], ["modified"], limit=1)
+        return str(rows[0].get("modified") or "") if rows else ""
+
     def list_doctypes(self) -> list[dict]:
         """Every DocType that isn't a child table."""
         return self.find("DocType", [["istable", "=", 0]],

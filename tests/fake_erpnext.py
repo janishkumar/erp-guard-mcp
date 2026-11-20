@@ -55,9 +55,12 @@ class FakeErpNext:
         # returns.
         self.mapped: dict[str, dict] = {}
         self._n = 0
+        self._clock = 0  # seconds after 2026-10-29 10:00:00, for `modified`
 
     # helpers for tests -----------------------------------------------------------------
     def add(self, doc: dict) -> dict:
+        if "modified" not in doc:
+            self._touch(doc)
         self.docs[(doc["doctype"], doc["name"])] = doc
         return doc
 
@@ -75,11 +78,16 @@ class FakeErpNext:
         self._n += 1
         return f"{doctype.upper().replace(' ', '-')}-{self._n}"
 
+    def _touch(self, doc: dict) -> dict:
+        """As every ERPNext save: a new `modified`."""
+        self._clock += 1
+        doc["modified"] = f"2026-10-29 10:{self._clock // 60:02d}:{self._clock % 60:02d}"
+        return doc
+
     def _store(self, doc: dict) -> dict:
         doc = {**doc, "name": doc.get("name") or self._name(doc["doctype"]),
-               "owner": doc.get("owner") or self.user, "docstatus": doc.get("docstatus", 0),
-               "modified": "2026-10-29 10:00:00"}
-        return self.add(doc)
+               "owner": doc.get("owner") or self.user, "docstatus": doc.get("docstatus", 0)}
+        return self.add(self._touch(doc))
 
     # transport -------------------------------------------------------------------------
     def __call__(self, req: httpx.Request) -> httpx.Response:
@@ -151,11 +159,11 @@ class FakeErpNext:
         if method == "frappe.client.insert":
             return ok(self._store(body["doc"]))
         if method == "frappe.client.save":
-            return ok(self.add({**body["doc"]}))
+            return ok(self.add(self._touch({**body["doc"]})))
         if method == "frappe.client.submit":
-            return ok(self.add({**body["doc"], "docstatus": 1}))
+            return ok(self.add(self._touch({**body["doc"], "docstatus": 1})))
         if method == "frappe.client.cancel":
-            d = self.docs[(body["doctype"], body["name"])]
+            d = self._touch(self.docs[(body["doctype"], body["name"])])
             d["docstatus"] = 2
             return ok(None)
         if method == "frappe.model.workflow.get_transitions":
@@ -166,7 +174,7 @@ class FakeErpNext:
             return ok([{"action": a, "next_state": a + "d"}
                        for a in self.transitions.get((doc["doctype"], doc["name"]), [])])
         if method == "frappe.model.workflow.apply_workflow":
-            d = self.docs[(body["doc"]["doctype"], body["doc"]["name"])]
+            d = self._touch(self.docs[(body["doc"]["doctype"], body["doc"]["name"])])
             state, docstatus = _NEXT.get(body["action"], (body["action"] + "d", None))
             d["workflow_state"] = state
             if docstatus is not None:
@@ -179,14 +187,14 @@ class FakeErpNext:
             if key in self.mapped:
                 return ok(copy.deepcopy(self.mapped[key]))
         if method == "frappe.handler.run_doc_method":
-            d = self.docs[(body["dt"], body["dn"])]
+            d = self._touch(self.docs[(body["dt"], body["dn"])])
             if body["method"] == "block_invoice":
                 d.update(on_hold=1, hold_comment=(body.get("args") or {}).get("hold_comment"))
             else:
                 d.update(on_hold=0, hold_comment=None)
             return ok(None)
         if method.endswith(".purchase_order.update_status"):
-            self.docs[("Purchase Order", body["name"])]["status"] = body["status"]
+            self._touch(self.docs[("Purchase Order", body["name"])])["status"] = body["status"]
             return ok(None)
         if method.endswith(".make_purchase_receipt"):
             src = self.docs[("Purchase Order", body["source_name"])]
@@ -217,7 +225,7 @@ class FakeErpNext:
             if doctype == "Purchase Order":
                 doc["items"] = [{**it, "doctype": "Purchase Order Item"} for it in body["items"]]
             return httpx.Response(200, json={"data": self._store(doc)})
-        d = self.docs[(doctype, name)]
+        d = self._touch(self.docs[(doctype, name)])
         d.update(body)
         return httpx.Response(200, json={"data": d})
 

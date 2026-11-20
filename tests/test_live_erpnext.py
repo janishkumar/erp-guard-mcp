@@ -174,7 +174,8 @@ def test_live_po_reject_revise_and_draft_cancel(created):
 
 def test_live_amend_pending_withdraws_it(created):
     """Amending a pending order withdraws it to Draft first. An approval code the manager
-    previewed before the amendment is refused at write time: the order isn't pending."""
+    previewed before the amendment is refused at write time, even once the amended order is
+    resubmitted: the code was bound to the order as previewed (its `modified`)."""
     req, mgr = svc("REQUESTER"), svc("MANAGER")
     _, out = run(req, "create_purchase_order", _po())
     po = out.target
@@ -190,9 +191,13 @@ def test_live_amend_pending_withdraws_it(created):
     assert (doc["workflow_state"], doc["docstatus"]) == ("Draft", 0)
     o = req.erp.get_order(po)
     assert o.status == Status.DRAFT and o.total == 7 * 640
+    assert run(req, "submit_for_approval", {"po": po})[1].outcome == "written"
     late = mgr.execute("approve_purchase_order", {"po": po}, early.code)
-    assert late.outcome == "blocked" and "Draft" in late.message
-    assert req.erp.get_doc("Purchase Order", po)["docstatus"] == 0
+    assert late.outcome == "refused" and "changed after the preview" in late.message
+    doc = req.erp.get_doc("Purchase Order", po)
+    assert (doc["workflow_state"], doc["docstatus"]) == ("Pending Approval", 0)
+    assert not doc.get("erp_guard_approver")
+    assert req.erp.read_audit(po, 1)[0].outcome == "refused"
 
 
 def test_live_requester_cancels_own_pending_order(created):

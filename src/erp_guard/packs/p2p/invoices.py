@@ -31,7 +31,7 @@ from erp_guard.packs.p2p.models import (
     Receipt,
     not_editable,
 )
-from erp_guard.service import Action, InvalidArgs, _decimal, _text, canonicaliser
+from erp_guard.service import Action, InvalidArgs, _decimal, _text, acts_on, canonicaliser
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -621,15 +621,15 @@ ACTIONS: list[Action] = [
         "invoice": _ref("invoice"),
         "lines": _note_lines,
         "reason": lambda a: _text(a, "reason", required=True),
-    }), _eval_note, _write_note, "invoice"),
+    }), _eval_note, _write_note, "invoice", acts_on(INVOICE, "invoice")),
     Action("hold_invoice", canonicaliser("hold_invoice", {
         "invoice": _ref("invoice"),
         "reason": lambda a: _text(a, "reason", required=True),
     }), lambda svc, c: _eval_hold(svc, c, True), lambda svc, c: _write_hold(svc, c, True),
-        "invoice"),
+        "invoice", acts_on(INVOICE, "invoice")),
     Action("release_invoice", canonicaliser("release_invoice", {
         "invoice": _ref("invoice"),
         "comment": lambda a: _text(a, "comment", required=True),
     }), lambda svc, c: _eval_hold(svc, c, False), lambda svc, c: _write_hold(svc, c, False),
-        "invoice"),
+        "invoice", acts_on(INVOICE, "invoice")),
 ]

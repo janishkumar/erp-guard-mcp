@@ -1019,3 +1019,32 @@ def test_update_routes_to_pack_and_rechecks(fake_svc):
     p = svc.preview("workflow_action", {"doctype": PI, "name": "ACC-PINV-D",
                                         "action": APPROVE})
     assert "invoice separation" in [r.check for r in p.checks if r.level == BLOCK]
+
+
+def test_workflow_code_refused_after_the_invoice_was_edited(fake_svc):
+    """A code for 'Submit for Approval' was bound to the invoice as previewed: edited since
+    (here through update_document), the code is refused and the refusal audited."""
+    svc, fake = fake_svc
+    wf = {"doctype": PI, "name": "ACC-PINV-D", "action": SUBMIT_FOR_APPROVAL}
+    early = svc.preview("workflow_action", wf)
+    assert early.code, [r.message for r in early.checks if r.level == BLOCK]
+    edit = {"doctype": PI, "name": "ACC-PINV-D", "fields": {"items": [{"qty": 3}]}}
+    p = svc.preview("update_document", edit)
+    assert svc.execute("update_document", edit, p.code).outcome == "written"
+    out = svc.execute("workflow_action", wf, early.code)
+    assert out.outcome == "refused" and "changed after the preview" in out.message
+    assert fake.docs[(PI, "ACC-PINV-D")]["workflow_state"] == "Draft"
+    assert not fake.method_calls("frappe.model.workflow.apply_workflow")
+    assert fake.audit()[-1]["outcome"] == "refused"
+    # Previewed again, on the edited version, it goes through.
+    p = svc.preview("workflow_action", wf)
+    assert svc.execute("workflow_action", wf, p.code).outcome == "written"
+
+
+def test_erpnext_doc_version_is_modified(fake_svc):
+    svc, fake = fake_svc
+    v = svc.erp.doc_version(PI, "ACC-PINV-D")
+    assert v == fake.docs[(PI, "ACC-PINV-D")]["modified"] and v
+    svc.erp.set_invoice_hold("ACC-PINV-D", True, "price dispute")
+    assert svc.erp.doc_version(PI, "ACC-PINV-D") not in ("", v)
+    assert svc.erp.doc_version(PI, "ACC-PINV-NOPE") == ""

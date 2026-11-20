@@ -13,7 +13,7 @@ from erp_guard import checks as C
 from erp_guard.ops import Write
 from erp_guard.packs.p2p import checks as P
 from erp_guard.packs.p2p.models import POSTED, DocState, ReceiptLine
-from erp_guard.service import Action, InvalidArgs, _decimal, _text, canonicaliser
+from erp_guard.service import Action, InvalidArgs, _decimal, _text, acts_on, canonicaliser
 
 if TYPE_CHECKING:
     from erp_guard.service import Service
@@ -213,10 +213,10 @@ ACTIONS: list[Action] = [
         "po": _po,
         "lines": _item_lines,
         "notes": lambda a: _text(a, "notes"),
-    }), _eval_receive, _write_receive, "po"),
+    }), _eval_receive, _write_receive, "po", acts_on("Purchase Order", "po")),
     Action("return_goods", canonicaliser("return_goods", {
         "receipt": lambda a: _text(a, "receipt", required=True, max_len=140),
         "lines": _item_lines,
         "reason": lambda a: _text(a, "reason", required=True),
-    }), _eval_return, _write_return, "receipt"),
+    }), _eval_return, _write_return, "receipt", acts_on("Purchase Receipt", "receipt")),
 ]

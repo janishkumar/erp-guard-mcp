@@ -438,7 +438,9 @@ def _payment(d: dict, rows: list[dict]) -> Payment:
         _date(d["posting_date"]), d.get("paid_from") or "",
         tuple(Allocation(r["reference_name"], _dec(r["allocated_amount"])) for r in rows),
         approver=d.get("erp_guard_approver") or None,
-        unallocated=_dec(d.get("unallocated_amount")))
+        unallocated=_dec(d.get("unallocated_amount")),
+        payment_type=d.get("payment_type") or "", party_type=d.get("party_type") or "",
+        paid_to=d.get("paid_to") or "")
 
 
 # Drafts of these are voided (flagged erp_guard_cancelled) rather than cancelled.
@@ -466,7 +468,8 @@ _P2P_DOCS: dict[str, tuple[str, str, list[str], list[str], Callable]] = {
     "Payment Entry": ("references", "Payment Entry Reference",
                       ["name", "owner", "docstatus", "workflow_state", "party",
                        "posting_date", "paid_from", "erp_guard_approver",
-                       "unallocated_amount", "erp_guard_cancelled"],
+                       "unallocated_amount", "erp_guard_cancelled", "payment_type",
+                       "party_type", "paid_to"],
                       ["reference_doctype", "reference_name", "allocated_amount"], _payment),
 }
 

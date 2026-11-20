@@ -99,6 +99,7 @@ def _payment_checks(svc: Service, pay: Payment) -> list[C.CheckResult]:
         others.update((p.id, p) for p in erp.list_payments(invoice=ref))
     others.pop(pay.id, None)
     return [
+        P.pay_to_supplier(pay.payment_type, pay.party_type),
         C.supplier_usable(erp.get_supplier(pay.supplier_id), pay.supplier_id),
         *P.payable_invoices(pay.supplier_id, list(pay.allocations), invoices, owed,
                             pay.unallocated),

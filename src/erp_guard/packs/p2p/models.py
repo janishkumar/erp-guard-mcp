@@ -204,6 +204,11 @@ class Payment:
     allocations: tuple[Allocation, ...]
     approver: str | None = None
     unallocated: Decimal = Decimal(0)
+    # As entered: erp-guard only ever drafts a Pay to a Supplier, but an entry made in the
+    # ERP's own UI can be anything, and the checks block all but that.
+    payment_type: str = "Pay"
+    party_type: str = "Supplier"
+    paid_to: str = ""
 
     @property
     def amount(self) -> Decimal:

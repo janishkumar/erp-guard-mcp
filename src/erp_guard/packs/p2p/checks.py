@@ -556,12 +556,17 @@ def payable_invoices(supplier_id: str, allocations: list[Allocation],
         what = "no invoice" if not allocations else f"{usd(unallocated)} unallocated"
         return [CheckResult(name, BLOCK, f"The payment has {what}; advance payments are not "
                             "allowed. Every amount is allocated to an approved invoice.")]
-    problems, over = [], []
+    # An entry made in the ERP's UI can reference one invoice on several rows: what it pays
+    # an invoice is the sum of them.
+    paying: dict[str, Decimal] = {}
     for a in allocations:
-        inv = invoices_by_id.get(a.invoice)
-        left = outstanding.get(a.invoice, Decimal(0))
+        paying[a.invoice] = paying.get(a.invoice, Decimal(0)) + a.amount
+    problems, over = [], []
+    for ref, amount in paying.items():
+        inv = invoices_by_id.get(ref)
+        left = outstanding.get(ref, Decimal(0))
         if inv is None:
-            problems.append(f"No purchase invoice '{a.invoice}'")
+            problems.append(f"No purchase invoice '{ref}'")
         elif inv.is_return:
             problems.append(f"{inv.id} is a debit note")
         elif inv.state not in POSTED:
@@ -572,8 +577,8 @@ def payable_invoices(supplier_id: str, allocations: list[Allocation],
             problems.append(f"{inv.id} is on hold")
         elif left <= 0:
             problems.append(f"nothing is owed on {inv.id}")
-        elif a.amount > left:
-            over.append(f"{inv.id}: paying {usd(a.amount)} but {usd(left)} is owed")
+        elif amount > left:
+            over.append(f"{inv.id}: paying {usd(amount)} but {usd(left)} is owed")
     out = [CheckResult(name, BLOCK, "; ".join(problems) + ".",
                        {"invoices": [a.invoice for a in allocations]}) if problems else
            CheckResult(name, PASS, f"Every invoice is an approved invoice of {supplier_id} "
@@ -581,6 +586,17 @@ def payable_invoices(supplier_id: str, allocations: list[Allocation],
     out.append(CheckResult(owed_name, BLOCK, "; ".join(over) + ".") if over else
                CheckResult(owed_name, PASS, "Each amount is within what is owed."))
     return out
+
+
+def pay_to_supplier(payment_type: str, party_type: str) -> CheckResult:
+    """A payment is a Pay to a Supplier. erp-guard drafts nothing else, but an entry made in
+    the ERP's own UI (a Receive, an Internal Transfer, a Pay to an Employee) blocks."""
+    name = "pay a supplier"
+    if (payment_type, party_type) != ("Pay", "Supplier"):
+        return CheckResult(name, BLOCK, f"This entry is a {payment_type or '(no type)'} to "
+                           f"a {party_type or '(no party type)'}; only a Pay to a Supplier "
+                           "goes through erp-guard.")
+    return CheckResult(name, PASS, "A Pay to a Supplier.")
 
 
 def duplicate_payment(allocations: list[Allocation], payments: list[Payment],

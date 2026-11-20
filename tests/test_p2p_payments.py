@@ -608,3 +608,44 @@ def test_generic_create_and_submit_of_payments_refused(fake_svc):
     assert p.code is None and any("pay_supplier" in r.message for r in p.checks)
     p = svc.preview("submit_document", {"doctype": PE, "name": "ACC-PAY-D"})
     assert p.code is None and any("workflow_action" in r.message for r in p.checks)
+
+
+# --- payment entries made in ERPNext's own UI --------------------------------------------
+
+def test_split_allocations_of_one_invoice_are_summed(erp):
+    """Two references to one invoice (possible in ERPNext's UI) can't each pass alone."""
+    by_id = {"PI-A": erp.get_invoice("PI-A")}
+    alloc = [Allocation("PI-A", D(60)), Allocation("PI-A", D(60))]
+    res = P.payable_invoices("SUP-HERC", alloc, by_id, {"PI-A": D(100)})
+    assert _level(res, "amount owed") == [BLOCK]
+    assert "PI-A: paying $120.00 but $100.00 is owed" in res[-1].message
+    ok = P.payable_invoices("SUP-HERC", [Allocation("PI-A", D(60)), Allocation("PI-A", D(40))],
+                            by_id, {"PI-A": D(100)})
+    assert _level(ok, "amount owed") == [PASS]
+
+
+@pytest.mark.parametrize("payment_type,party_type,blocked", [
+    ("Pay", "Supplier", False), ("Receive", "Supplier", True),
+    ("Internal Transfer", "Supplier", True), ("Pay", "Employee", True),
+    ("Pay", "Customer", True)])
+def test_only_a_pay_to_a_supplier_is_approved(erp, policy, payment_type, party_type, blocked):
+    pay = _submitted(erp, policy)
+    erp.payments[pay.id] = replace(pay, payment_type=payment_type, party_type=party_type)
+    res = _wf(erp, policy, MGR, pay.id, APPROVE)[3]
+    assert _level(res, "pay a supplier") == [BLOCK if blocked else PASS]
+    if blocked:
+        assert payment_type in _checks(res, "pay a supplier")[0].message
+
+
+def test_erpnext_payment_reads_type_party_and_paid_to(fake_svc):
+    svc, fake = fake_svc
+    pay = svc.erp.get_payment("ACC-PAY-D")
+    assert (pay.payment_type, pay.party_type, pay.paid_to) == ("Pay", "Supplier", "")
+    fake.docs[(PE, "ACC-PAY-D")].update(payment_type="Internal Transfer", party_type="",
+                                        paid_to="Cash - LDU")
+    pay = svc.erp.get_payment("ACC-PAY-D")
+    assert (pay.payment_type, pay.party_type, pay.paid_to) == (
+        "Internal Transfer", "", "Cash - LDU")
+    p = svc.preview("workflow_action", {"doctype": PE, "name": "ACC-PAY-D",
+                                        "action": SUBMIT_FOR_APPROVAL})
+    assert "pay a supplier" in [r.check for r in p.checks if r.level == BLOCK]

@@ -280,7 +280,7 @@ def test_generic_tools_need_erpnext(erp, policy):
     svc = Service(erp, policy, today=lambda: TODAY)  # the in-memory connector
     p = svc.preview("create_document", task_create())
     assert p.blocked
-    assert by_check(p.checks, "scope")[0].message.startswith("generic tools need ERPNext")
+    assert by_check(p.checks, "scope")[0].message.startswith("Generic tools need ERPNext")
     out = svc.execute("create_document", task_create(), "ABCD2345")
     assert out.outcome == "refused"
 

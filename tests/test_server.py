@@ -93,9 +93,21 @@ def test_generic_read_tools_need_erpnext(svc):
         for text in (server.describe_doctype("Task"), server.find_documents("Task"),
                      server.get_document("Task", "T"),
                      server.draft_from("Purchase Order", "P", "Purchase Receipt")):
-            assert "need ERPNext" in text
+            assert text.startswith("Generic tools need ERPNext;"), text
     finally:
         server.set_service(None)
+
+
+def test_instructions_describe_payments_accurately():
+    """Payments are in scope (drafts against approved invoices, approved through a
+    workflow); nothing reaches a bank and bank details are never written."""
+    text = server.mcp.instructions
+    assert "never makes payments" not in text
+    for want in ("Payment Entr", "approved supplier invoices", "workflow",
+                 "Nothing is sent to a bank", "bank details"):
+        assert want in text, want
+    doc = server.audit_log.__doc__
+    assert "purchase order or supplier" not in doc and "any document" in doc
 
 
 def test_preview_then_write_through_the_tools(svc, erp, policy):

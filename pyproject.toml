@@ -1,7 +1,7 @@
 [project]
 name = "erp-guard-mcp"
 version = "0.1.0"
-description = "MCP server for procure-to-pay writes in an ERP, with duplicate-supplier, split-purchase, budget, price and segregation-of-duties checks enforced in code."
+description = "MCP server for guarded writes to any ERPNext activity in scope: every write is previewed, confirmed with a one-time code, re-checked and audited, with business checks enforced in code. Phase 1 covers purchase to pay, from purchase requests to supplier payments."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

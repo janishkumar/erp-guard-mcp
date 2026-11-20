@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 Result = tuple[str, list[CheckResult]]
 
 MAX_FIELDS_JSON = 100_000  # characters of canonical JSON in one write
-NEED_ERPNEXT = "generic tools need ERPNext; this connector has no document metadata."
+NEED_ERPNEXT = "Generic tools need ERPNext; this connector has no document metadata."
 
 
 @cache

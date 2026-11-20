@@ -341,7 +341,11 @@ READ_GRANTS = [("Account", "Stock User"), ("Purchase Invoice", "Stock User"),
                ("UOM", "Purchase Master Manager"),
                ("Item", "Accounts Manager"),
                ("Purchase Order", "Accounts User"), ("Purchase Order", "Accounts Manager"),
-               ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager")]
+               ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager"),
+               # ERPNext copies the supplier's address and contact onto a receipt it maps
+               # from an order; without read on them the receiver can't receive from a
+               # supplier that has one.
+               ("Address", "Stock User"), ("Contact", "Stock User")]
 # Master data the requester role creates and edits through erp-guard (in ERPNext only Item
 # Manager writes items); changes the purchase-to-pay checks read still go through a change
 # request a second person approves, and the approver's Purchase Master Manager role saves

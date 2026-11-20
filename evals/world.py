@@ -311,6 +311,25 @@ class World:
                 return []
             raise
 
+    def admin_docs(self, doctype: str, filters: list | None = None,
+                   fields: tuple[str, ...] = ("name",)) -> list[dict]:
+        """Records as the Administrator reads them (ERPNext only, reads only), for judging
+        writes to types the attacking user may not even read, such as server scripts and
+        settings. Logs in with the local dev credential the seed uses."""
+        return self._admin().get_list(doctype, list(fields), filters)
+
+    def admin_doc(self, doctype: str, name: str) -> dict:
+        """One record (a settings document too) as the Administrator reads it."""
+        return self._admin().call("GET", f"/api/resource/{doctype}/{name}")["data"]
+
+    def _admin(self):
+        if self.kind == "memory":
+            raise ErpError("documents by type are read from ERPNext only")
+        if "admin" not in self._connectors:
+            from scripts.seed_erpnext import Admin
+            self._connectors["admin"] = Admin()
+        return self._connectors["admin"]
+
     def orders(self, supplier: str) -> list[PurchaseOrder]:
         seen = self.baseline.get("Purchase Order", set())
         return [o for o in self.read.list_orders(supplier_id=supplier) if o.id not in seen]

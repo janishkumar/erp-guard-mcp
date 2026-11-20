@@ -22,10 +22,12 @@ up:              ## start ERPNext v16 locally on http://localhost:8080 (~4 GB RA
 	$(COMPOSE) up -d
 	@echo "waiting for ERPNext (a brand-new site takes ~5 minutes to install)..."
 	@# Poll the one-off create-site container rather than `compose wait`, which fails on
-	@# Compose v5 once the container has already exited.
-	@until [ "$$($(COMPOSE) ps -a --format '{{.State}} {{.ExitCode}}' create-site)" = "exited 0" ]; do \
+	@# Compose v5 once the container has already exited. Gives up after 10 minutes.
+	@n=0; until [ "$$($(COMPOSE) ps -a --format '{{.State}} {{.ExitCode}}' create-site)" = "exited 0" ]; do \
 		if $(COMPOSE) ps -a --format '{{.State}} {{.ExitCode}}' create-site | grep -Eq '^exited [1-9]'; then \
 			echo "create-site failed; see: $(COMPOSE) logs create-site"; exit 1; fi; \
+		n=$$((n + 1)); if [ $$n -ge 200 ]; then \
+			echo "create-site didn't finish in 10 minutes; see: $(COMPOSE) logs create-site"; exit 1; fi; \
 		sleep 3; done
 	@until curl -sf http://localhost:8080/api/method/ping >/dev/null; do sleep 3; done
 	@echo "ERPNext is up. First time? run: make seed"

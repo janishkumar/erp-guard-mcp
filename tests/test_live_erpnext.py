@@ -269,6 +269,24 @@ def test_live_generic_task_create_and_update():
     assert {a.outcome for a in trail} == {"written"}
 
 
+def test_live_generic_child_row_numbers():
+    """A number in a child row reaches ERPNext as a number: a timesheet (a later-phase type
+    the generic tools write) whose time log ERPNext adds up on insert. Sent as the
+    canonical text, ERPNext failed with a 500 (TypeError on abs() of a string). The draft
+    stays; nothing is deleted."""
+    req = svc("REQUESTER")
+    # A start of its own: ERPNext refuses time logs that overlap an earlier run's.
+    start = date.today() - timedelta(days=1 + uuid.uuid4().int % 3650)
+    p, out = run(req, "create_document", {"doctype": "Timesheet", "fields": {
+        "company": demo.COMPANY, "note": "live child-row numbers",
+        "time_logs": [{"from_time": f"{start.isoformat()} 09:00:00", "hours": 2.5,
+                       "is_billable": 1, "billing_hours": 2.5, "billing_rate": 185}]}})
+    assert out.outcome == "written", (out.message, [c.message for c in p.checks])
+    doc = req.erp.get_doc("Timesheet", out.target)
+    assert (doc["time_logs"][0]["hours"], doc["total_hours"],
+            doc["total_billable_amount"]) == (2.5, 2.5, 462.5)
+
+
 def test_live_generic_scope_and_workflow_detection():
     req = svc("REQUESTER")
     meta, _ = meta_of(req, "Task")
@@ -428,6 +446,36 @@ def test_live_read_grants(created):
     draft = ap.map_doc("Purchase Order", o.id, "Purchase Invoice")
     assert [i["item_code"] for i in draft["items"]] == ["PAPER-A4"]
     assert svc("CONTROLLER").erp.get_doc("Item", "PAPER-A4")["is_stock_item"] == 1
+
+
+def test_live_receive_from_supplier_with_address(created):
+    """ERPNext copies the supplier's billing address and contact onto a receipt mapped from
+    the order; with the seed's read grant the receiver still receives through the guarded
+    tool. The address and contact stay (nothing is deleted; a rerun reuses them); the
+    receipt and order are cancelled."""
+    supplier = demo.seed_suppliers("master")[5]["name"]
+    req = svc("REQUESTER").erp
+    link = [{"link_doctype": "Supplier", "link_name": supplier}]
+    if not req.find("Address", [["address_title", "=", supplier]]):
+        req.insert({"doctype": "Address", "address_title": supplier, "address_type": "Billing",
+                    "address_line1": "1200 W Lake St", "city": "Chicago", "pincode": "60607",
+                    "country": "United States", "is_primary_address": 1, "links": link})
+    if not req.find("Contact", [["first_name", "=", "Live receipts"]]):
+        req.insert({"doctype": "Contact", "first_name": "Live receipts",
+                    "is_primary_contact": 1, "links": link})
+    mgr = svc("MANAGER").erp
+    o = req.create_order(supplier, CC, [Line("PAPER-A4", Decimal(2), Decimal(42))],
+                         "live receipt with address", date.today() + timedelta(days=14))
+    created.append(o.id)
+    req.set_status(o.id, Status.PENDING, "")
+    mgr.approve_order(o.id)
+    assert req.get_doc("Purchase Order", o.id)["supplier_address"]
+    rcv = svc("RECEIVER")
+    p, out = run(rcv, "receive_goods", {"po": o.id, "lines": [
+        {"item_code": "PAPER-A4", "qty": 2}]})
+    assert out.outcome == "written", (out.message, [c.message for c in p.checks])
+    assert rcv.erp.get_doc("Purchase Receipt", out.target)["supplier_address"]
+    rcv.erp.cancel("Purchase Receipt", out.target)
 
 
 # --- purchase-to-pay documents through the connector -----------------------------------

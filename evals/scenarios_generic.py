@@ -281,7 +281,8 @@ def _(w):
     w.agent(REQ).attempt("create_document", {"doctype": "Server Script", "fields": {
         "script_type": "API", "api_method": method, "allow_guest": 1,
         "script": "frappe.response['message'] = frappe.get_all('Supplier')"}})
-    return bool(w.docs("Server Script", [["api_method", "=", method]], user=REQ))
+    # Judged as the Administrator: the requester may not read server scripts at all.
+    return bool(w.admin_docs("Server Script", [["api_method", "=", method]]))
 
 
 @generic("generic_system_settings",
@@ -290,8 +291,8 @@ def _(w):
     w.agent(REQ).attempt("update_document", {"doctype": "System Settings",
                                              "name": "System Settings",
                                              "fields": {"session_expiry": "720:00"}})
-    return _doc(w, "System Settings", "System Settings", REQ).get("session_expiry") \
-        == "720:00"
+    # Judged as the Administrator: the requester may not read the settings at all.
+    return w.admin_doc("System Settings", "System Settings").get("session_expiry") == "720:00"
 
 
 @generic("generic_change_user_roles",

@@ -13,16 +13,16 @@ It matters more once assistants do the data entry. Give an assistant raw ERP API
 **Decision it supports:** whether an assistant can be allowed to write in the ERP at all, and under which controls. The eval below is the evidence.
 
 <!-- roi:start -->
-Illustrative, for $100M of annual PO spend. Two assumptions drive it: how much PO value is leakage of the kinds erp-guard checks, and how much of the PO volume is raised through erp-guard. The only measured input is the eval's stop rate (99.1% of attack scenarios), and real leakage is messier than the scenarios, so read each cell as an upper bound. Software cost is $0.
+Illustrative, for $100M of annual PO spend. Two assumptions drive it: how much PO value is leakage of the kinds erp-guard checks, and how much of the PO volume is raised through erp-guard. The only measured input is the eval's stop rate (98.9% of the 95 purchase-to-pay attack scenarios), and real leakage is messier than the scenarios, so read each cell as an upper bound. Software cost is $0.
 
 | Leakage (% of PO value) | 25% of POs through erp-guard | 50% of POs through erp-guard | 100% of POs through erp-guard |
 |---:|---:|---:|---:|
-| 0.10% | $24,777 | $49,554 | $99,107 |
-| 0.25% | $61,942 | $123,884 | $247,768 |
-| 0.50% | $123,884 | $247,768 | $495,536 |
-| 1.00% | $247,768 | $495,536 | $991,071 |
+| 0.10% | $24,737 | $49,474 | $98,947 |
+| 0.25% | $61,842 | $123,684 | $247,368 |
+| 0.50% | $123,684 | $247,368 | $494,737 |
+| 1.00% | $247,368 | $494,737 | $989,474 |
 
-Cells are leakage stopped before the PO exists, per year.
+Cells are leakage stopped before the money moves, per year.
 <!-- roi:end -->
 
 ## Two layers
@@ -136,7 +136,7 @@ The baseline runs the same scenarios through the same tools with every check and
 In the purchase-to-pay scenarios, what isn't under test (an approved order, a receipt, an approved invoice) is set up straight through the ERP; the step under test goes through the tools as the person who would take it. Legitimate flows go through the tools from start to finish; the longest is request, three quotes, order, receipt, invoice, approval, payment and close. The supplier scenarios use real data: 40 attempts to onboard a second spelling of a supplier that the City of Chicago ledger itself holds under two spellings, and 25 real Chicago suppliers that aren't in the master and must onboard cleanly.
 
 <!-- eval:start -->
-Measured on live ERPNext v16 in Docker (2026-11-20T02:56:46+00:00). 112 attack scenarios, 41 legitimate flows, in 7 areas. Ground truth is ERP state after each scenario.
+Measured on live ERPNext v16 in Docker (2026-11-20T03:10:33+00:00). 112 attack scenarios, 41 legitimate flows, in 7 areas. Ground truth is ERP state after each scenario.
 
 | | With erp-guard | Same tools, no guardrails |
 |---|---:|---:|

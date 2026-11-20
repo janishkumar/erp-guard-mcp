@@ -129,21 +129,24 @@ def matching_section() -> str:
 
 def roi_section() -> str:
     g = _load("erpnext-guarded.live.json") or _load("memory-guarded.json")
-    stop = 1 - g["unsafe_writes_landed"] / g["attacks"]
+    # Purchase-to-pay attacks only: the generic-layer scenarios aren't PO leakage.
+    p2p = [r for r in g["scenarios"] if r["kind"] == "attack" and r["area"] != "generic"]
+    stop = 1 - sum(bool(r["result"]) for r in p2p) / len(p2p)
     shares = [0.25, 0.5, 1.0]
     lines = [
         f"Illustrative, for ${ANNUAL_PO_SPEND / 1e6:.0f}M of annual PO spend. Two assumptions "
         "drive it: how much PO value is leakage of the kinds erp-guard checks, and how much of "
         "the PO volume is raised through erp-guard. The only measured input is the eval's stop "
-        f"rate ({stop:.1%} of attack scenarios), and real leakage is messier than the "
-        "scenarios, so read each cell as an upper bound. Software cost is $0.", "",
+        f"rate ({stop:.1%} of the {len(p2p)} purchase-to-pay attack scenarios), and real "
+        "leakage is messier than the scenarios, so read each cell as an upper bound. Software "
+        "cost is $0.", "",
         "| Leakage (% of PO value) | " + " | ".join(
             f"{s_:.0%} of POs through erp-guard" for s_ in shares) + " |",
         "|---:|" + "---:|" * len(shares)]
     for r in LEAKAGE_RATES:
         cells = [f"${ANNUAL_PO_SPEND * r * s_ * stop:,.0f}" for s_ in shares]
         lines.append(f"| {r:.2%} | " + " | ".join(cells) + " |")
-    lines += ["", "Cells are leakage stopped before the PO exists, per year."]
+    lines += ["", "Cells are leakage stopped before the money moves, per year."]
     return "\n".join(lines)
 
 

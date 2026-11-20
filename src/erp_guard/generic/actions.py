@@ -348,6 +348,38 @@ def evaluate_write(svc: Service, w: Write) -> Result:
 
 # --- write ---------------------------------------------------------------------------
 
+NUMERIC_TYPES = frozenset({"Int", "Float", "Currency", "Percent"})
+
+
+def _number(text: str, fieldtype: str):
+    try:
+        d = Decimal(text)
+    except InvalidOperation:
+        return text  # not a number: ERPNext says why
+    if not d.is_finite():
+        return text
+    if fieldtype == "Int" and d == d.to_integral_value():
+        return int(d)
+    return float(d)
+
+
+def typed_fields(meta: DocMeta, fields: dict) -> dict:
+    """The fields as ERPNext takes them: numeric field types (top level and child rows) as
+    JSON numbers, converted from the canonical text the confirmation code was bound to.
+    ERPNext casts top-level numbers itself, but a controller can do arithmetic on child
+    rows before it does."""
+    out = {}
+    for k, v in fields.items():
+        fm, child = meta.fields.get(k), meta.children.get(k)
+        if child is not None and isinstance(v, list):
+            out[k] = [typed_fields(child, r) if isinstance(r, dict) else r for r in v]
+        elif fm is not None and fm.fieldtype in NUMERIC_TYPES and isinstance(v, str):
+            out[k] = _number(v, fm.fieldtype)
+        else:
+            out[k] = v
+    return out
+
+
 def apply_write(svc: Service, w: Write) -> tuple[str, str]:
     meta, _ = meta_of(svc, w.doctype)
     scope = scope_of(svc, meta, w)
@@ -356,14 +388,15 @@ def apply_write(svc: Service, w: Write) -> tuple[str, str]:
     if scope not in (Scope.GENERIC, Scope.LATER):  # evaluate blocks these first
         raise ErpError(scope_message(meta, scope))
     erp = svc.erp
+    fields = typed_fields(meta, w.fields)
     if w.op is Op.CREATE:
-        doc = erp.insert({**w.fields, "doctype": w.doctype})
+        doc = erp.insert({**fields, "doctype": w.doctype})
         return doc["name"], f"{w.doctype} {doc['name']} created as a draft."
     if w.op is Op.UPDATE:
         current = erp.get_doc(w.doctype, w.name)
         if current is None:
             raise ErpError(f"No {w.doctype} {w.name}")
-        erp.save({**current, **w.fields})
+        erp.save({**current, **fields})
         return w.name, f"{w.doctype} {w.name} updated."
     if w.op is Op.SUBMIT:
         erp.submit(w.doctype, w.name)
@@ -377,7 +410,7 @@ def apply_write(svc: Service, w: Write) -> tuple[str, str]:
     if w.op is Op.CANCEL:
         erp.cancel(w.doctype, w.name)
         return w.name, f"{w.doctype} {w.name} cancelled. Reason: {w.reason}"
-    doc = erp.amend(w.doctype, w.name, w.fields)
+    doc = erp.amend(w.doctype, w.name, fields)
     return doc["name"], f"{w.doctype} {w.name} amended as new draft {doc['name']}."
 
 

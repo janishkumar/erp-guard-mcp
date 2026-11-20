@@ -432,3 +432,25 @@ def test_purchase_order_workflow_actions_the_pack_refuses(svc, fake, action, nee
     assert needle in " ".join(r.message for r in p.checks if r.level == BLOCK)
     assert svc.execute("workflow_action", _wf(action), "ABCD2345").outcome == "refused"
     assert not fake.method_calls(APPLY)
+
+
+def test_generic_write_sends_numbers_as_numbers(svc, fake):
+    """The code is bound to the canonical text, but ERPNext gets numeric field types as JSON
+    numbers, top level and in child rows (a controller may do arithmetic on child rows
+    before ERPNext casts them)."""
+    fake.add({"doctype": "Company", "name": "Lakeside Demo Utilities"})
+    args = {"doctype": "Customer", "fields": {
+        "customer_name": "Lakeside Water Board", "customer_type": "Company",
+        "default_commission_rate": 2.5,
+        "credit_limits": [{"company": "Lakeside Demo Utilities", "credit_limit": 5000,
+                           "bypass_credit_limit_check": 0}]}}
+    p = svc.preview("create_document", args)
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    assert p.args["fields"]["credit_limits"][0]["credit_limit"] == "5000"  # what was hashed
+    out = svc.execute("create_document", args, p.code)
+    assert out.outcome == "written", out.message
+    sent = fake.method_calls("frappe.client.insert")[-1]["doc"]
+    assert sent["default_commission_rate"] == 2.5
+    row = sent["credit_limits"][0]
+    assert row["credit_limit"] == 5000.0 and isinstance(row["credit_limit"], float)
+    assert row["company"] == "Lakeside Demo Utilities"

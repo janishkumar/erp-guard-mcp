@@ -265,6 +265,13 @@ def _res(doctype: str, name: str | None = None) -> str:
     return p + (f"/{quote(name, safe='')}" if name else "")
 
 
+def _message_text(m) -> str:
+    """One ERPNext message as text; a message can also be a list of lines (a table)."""
+    if isinstance(m, list):
+        return " ".join(_message_text(x) for x in m)
+    return str(m)
+
+
 def _error_text(r: httpx.Response) -> str:
     try:
         data = r.json()
@@ -273,8 +280,9 @@ def _error_text(r: httpx.Response) -> str:
     msgs = data.get("_server_messages")
     if msgs:
         try:
-            return "; ".join(json.loads(m).get("message", m) for m in json.loads(msgs))[:500]
-        except (ValueError, AttributeError):
+            return "; ".join(_message_text(json.loads(m).get("message", m))
+                             for m in json.loads(msgs))[:500]
+        except (ValueError, AttributeError, TypeError):
             pass
     return str(data.get("exception") or data.get("exc_type") or data)[:500]
 

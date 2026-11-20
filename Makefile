@@ -21,7 +21,12 @@ test-live:       ## integration tests against the local ERPNext (make up && make
 up:              ## start ERPNext v16 locally on http://localhost:8080 (~4 GB RAM)
 	$(COMPOSE) up -d
 	@echo "waiting for ERPNext (a brand-new site takes ~5 minutes to install)..."
-	@$(COMPOSE) wait create-site >/dev/null
+	@# Poll the one-off create-site container rather than `compose wait`, which fails on
+	@# Compose v5 once the container has already exited.
+	@until [ "$$($(COMPOSE) ps -a --format '{{.State}} {{.ExitCode}}' create-site)" = "exited 0" ]; do \
+		if $(COMPOSE) ps -a --format '{{.State}} {{.ExitCode}}' create-site | grep -Eq '^exited [1-9]'; then \
+			echo "create-site failed; see: $(COMPOSE) logs create-site"; exit 1; fi; \
+		sleep 3; done
 	@until curl -sf http://localhost:8080/api/method/ping >/dev/null; do sleep 3; done
 	@echo "ERPNext is up. First time? run: make seed"
 

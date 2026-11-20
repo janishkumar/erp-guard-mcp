@@ -194,3 +194,13 @@ def test_from_env_takes_the_bank_account_from_policy(monkeypatch):
     monkeypatch.setenv("ERPNEXT_API_SECRET", "s")
     e = ErpNext.from_env()
     assert e.c.allowed_bank_values == frozenset({"Demo Operating Bank - LDU"})
+
+
+def test_error_text_reads_messages_that_are_lists():
+    """ERPNext sends some validation messages as a list of lines; the error still reads as
+    text instead of failing while it's being built."""
+    from erp_guard.connectors.erpnext import _error_text
+    msgs = [json.dumps({"message": ["Row 1: rate 33000", "is above the quotation"]}),
+            json.dumps({"message": "Not allowed"})]
+    r = httpx.Response(417, json={"_server_messages": json.dumps(msgs)})
+    assert _error_text(r) == "Row 1: rate 33000 is above the quotation; Not allowed"

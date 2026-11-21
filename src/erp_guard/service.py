@@ -269,7 +269,8 @@ class Service:
 
     def fingerprint(self, action: str, canon: dict) -> str:
         """The current version of every existing document the write acts on ("" if none):
-        ERPNext's `modified`, the memory ERP's change counter. Reads only."""
+        ERPNext's `modified`, the memory ERP's change counter, a hash of the order on SAP.
+        Reads only."""
         targets = self.actions[action].targets
         if targets is None:
             return ""

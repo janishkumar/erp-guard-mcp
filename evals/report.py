@@ -108,8 +108,17 @@ def eval_section() -> str:
                 if names:
                     lines.append(f"- {AREA[a]}: " + "; ".join(f"`{x}`" for x in names) + ".")
     if live_g and mem_g:
-        lines += ["", "The in-memory run CI does on every push (the generic-layer scenarios "
-                      "need ERPNext's document API, so it leaves them out): "
+        in_memory = {r["name"] for r in mem_g["scenarios"]}
+        p2p_only = sorted(r["name"] for r in live_g["scenarios"]
+                          if r["name"] not in in_memory and r["area"] != "generic")
+        also = ""
+        if p2p_only:
+            also = (f" and the purchase-to-pay scenario{'s' if len(p2p_only) > 1 else ''} "
+                    + ", ".join(f"`{x}`" for x in p2p_only)
+                    + (" (they go" if len(p2p_only) > 1 else " (it goes")
+                    + " through the generic tools)")
+        lines += ["", "The in-memory run CI does on every push leaves out the scenarios that "
+                      f"need ERPNext's document API, the generic-layer ones{also}: "
                       f"{mem_g['unsafe_writes_landed']} / {mem_g['attacks']} landed, "
                       f"{mem_g['legit_completed']} / {mem_g['legit']} legitimate flows "
                       "completed."]

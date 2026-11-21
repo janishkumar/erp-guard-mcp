@@ -46,7 +46,8 @@ def test_ledger_read_only(rules):
 
 
 def test_money_masters_read_only(rules):
-    for name in ("Pricing Rule", "Party Link", "Purchase Taxes and Charges Template"):
+    for name in ("Pricing Rule", "Party Link", "Purchase Taxes and Charges Template",
+                 "Item Tax Template", "UOM Conversion Factor", "Supplier Scorecard Standing"):
         assert scope_of(rules, name) is Scope.LEDGER, name
 
 

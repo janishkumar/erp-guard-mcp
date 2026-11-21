@@ -97,6 +97,12 @@ doctypes = [
     "Accounting Period", "Currency Exchange", "Bank Transaction Rule", "Bank Account Subtype",
     "Bank Account Type", "Shareholder", "Subscription", "Supplier Scorecard", "Supplier Group",
     "Item Group", "POS Profile", "Serial No", "Batch",
+    # Added in the final review, the same reasoning: tax and shipping charges, payment
+    # terms, unit conversions and supplier scoring all feed prices, amounts owed or whether
+    # a supplier can be ordered from.
+    "Item Tax Template", "Tax Category", "Shipping Rule", "Payment Term",
+    "UOM Conversion Factor", "Supplier Scorecard Standing", "Supplier Scorecard Criteria",
+    "Supplier Scorecard Variable",
     # System-written logs.
     "Ledger Health", "Bisect Nodes", "Process Payment Reconciliation Log",
     "Bank Statement Import Log",

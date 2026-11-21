@@ -41,6 +41,10 @@ jobs:
           uv build --wheel
           uv run --isolated --no-project --with dist/*.whl python -c \
             "import erp_guard.server, erp_guard.connectors.erpnext, erp_guard.connectors.sap; print('ok')"
+          # The bundled scope rules load from the installed wheel, not the checkout.
+          cd "$RUNNER_TEMP" && uv run --isolated --no-project \
+            --with "$GITHUB_WORKSPACE"/dist/*.whl python -c \
+            "from erp_guard.generic.scope import load_scope; r = load_scope(); assert r.ledger_doctypes; print('scope ok')"
       - name: Dependency audit (advisory)
         if: matrix.python == '3.12'
         run: |

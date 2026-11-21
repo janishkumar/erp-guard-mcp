@@ -1,7 +1,7 @@
 # erp-guard-mcp: design
 
 Author: Janish Kumar
-Status: v1 (purchase orders and suppliers, as po-guard-mcp) built and verified 2026-10-30. v2 scope (any ERPNext activity, phase by phase) agreed 2026-10-31; this document covers the overall shape and phase 1 in full. Phase 1 is for review, not yet approved.
+Status: v1 (purchase orders and suppliers, as po-guard-mcp) built and verified 2026-10-30. v2 scope (any ERPNext activity, phase by phase) agreed 2026-10-31; this document covers the overall shape and phase 1 in full. Phase 1 (the generic layer and the purchase-to-pay pack) is built and reviewed on its branch, not yet merged.
 
 ## Problem
 
@@ -53,7 +53,7 @@ erp_guard.service            preview / commit, confirmation codes, audit (unchan
 erp_guard.connectors     erpnext.py (live), memory.py (tests, CI eval), sap.py (v1 PO only)
 ```
 
-**Layer 1** is a small set of general tools that work on any document type ERPNext has (408 in v16.52.0; 76 of them have a submit step). It gives coverage from day one: if ERPNext lets a user do something and it's in scope, they can do it through the MCP, with the generic checks and the full write protocol.
+**Layer 1** is a small set of general tools that work on any document type ERPNext has (472 that aren't child tables in the v16.52.0 list recorded in `tests/fixtures/erpnext/doctypes.json`, erp-guard's two custom types included; 77 of them have a submit step). It gives coverage from day one: if ERPNext lets a user do something and it's in scope, they can do it through the MCP, with the generic checks and the full write protocol.
 
 **Layer 2** is a pack per business area. A pack owns a set of document types, adds the area's checks and a few task-shaped tools that are easier for a model to use than raw documents, and comes with its own eval scenarios.
 
@@ -99,11 +99,11 @@ No demo user holds the CFO tier, so anything above $250K can't be approved in th
 ## The write protocol (unchanged)
 
 1. **Preview** (read-only): takes the write tool's name and exact arguments, canonicalises them, runs every check, and returns what would change, each check's result with evidence, and, only if nothing blocks, a one-time code bound to (action, actor, sha256 of the canonical arguments) and to the version of every existing document the write acts on (ERPNext's `modified`; the in-memory ERP's change counter; a hash of the order as read on SAP). The version is read before the checks run.
-2. **Write** with the code. Codes are 8 characters, single use (burned on any attempt), 15 minutes, in memory. If a target document changed after the preview, the write is refused ("the document changed after the preview; preview again") and audited, even when the change was undone or the document is back in the state the preview saw.
+2. **Write** with the code. Codes are 8 characters, single use (burned on any attempt), 15 minutes, in memory. If a target document changed after the preview, the write is refused ("the document changed after the preview; preview again") and audited. On ERPNext and the in-memory ERP that holds even when the document is back in the state the preview saw, since any save changes the version.
 3. **Re-check** against fresh ERP data at write time. A code never overrides a block. A failure while re-checking (an ERP error, say) is audited as `error`; nothing is written.
 4. **Audit**: every write-tool call is recorded in the ERP, refused ones included, in a create/read-only custom DocType (`ERP Guard Audit`).
 
-For generic writes the preview's "what would change" is a field-by-field diff against the current document (or the full field list for a new one), with links resolved to names.
+For generic writes the preview's "what would change" is a field-by-field diff against the current document (or the full field list for a new one). A link shows the linked record's ID as it is written (ERPNext's `name`, e.g. `PUR-ORD-2026-00012`), not its title; child tables show as rows added, changed and removed.
 
 ## Layer 1: the generic layer
 
@@ -158,9 +158,19 @@ Pack-owned also covers the master data a pack's checks read. If Item were writab
 
 The eval includes attacks that use the generic tools on pack-owned types and on that master data.
 
+### Change requests
+
+A change that needs a second person is recorded as an `ERP Guard Change Request` (a custom submittable DocType with its own workflow) and put to Pending Approval as it is created; nothing on the master changes until it is approved.
+
+- **Update-type**: `update_document` on a master changes a field the checks read (`CHECK_FIELDS` in `packs/p2p/masters.py`; any field of an Address, Contact, Warehouse or Price List). The whole update goes into the request, not just the watched fields.
+- **Create-type**: `create_document` of an Address or Contact linked to a supplier. The request has no target name; approving it inserts the new document and records its name as the target. A Supplier itself is created only by `onboard_supplier`.
+- **Second person**: decided with `workflow_action` (Approve, or Reject with a comment) by a purchase approver, meaning a user with a purchase-order approval limit in `config/policy.toml`, who neither asked for the change nor made the request, on a request nobody has changed since it was submitted.
+- **Open documents**: the change is blocked while open documents reference the record (live orders, unpaid invoices, draft or pending payments, receipts and invoices with the item), checked when the request is made and again when it is approved.
+- **Order of writes**: on approval the change is saved on the target (or the new document inserted) first, and only then is the request approved and marked Applied. If the save fails, the request stays pending.
+
 ### Approvals on ERPNext workflows
 
-v1 tracked approval with a custom status field. v2 uses ERPNext's own Workflow feature, so approvals show in ERPNext's UI and the generic `workflow_action` tool covers every area. `make seed` creates workflows (states, transitions, which roles may act) for Material Request, Purchase Order, Purchase Invoice and Payment Entry. Pending states stay drafts; the approval transition submits the document. ERPNext's workflow conditions only check roles; tiers, separation of duties and the rest stay in the pack's checks, which run before the transition is sent.
+v1 tracked approval with a custom status field. v2 uses ERPNext's own Workflow feature, so approvals show in ERPNext's UI and the generic `workflow_action` tool covers every area. `make seed` creates five workflows (states, transitions, which roles may act): Material Request, Purchase Order, Purchase Invoice, Payment Entry and ERP Guard Change Request (see "Change requests"). Pending states stay drafts; the approval transition submits the document. ERPNext's workflow conditions only check roles; tiers, separation of duties and the rest stay in the pack's checks, which run before the transition is sent.
 
 The Purchase Order workflow has three additions. Every transition also checks erp-guard's cancelled-draft flag (`erp_guard_cancelled`): ERPNext can't cancel a draft and erp-guard never deletes, so a draft cancelled through erp-guard keeps its state with the flag set, and no further action is offered on it. Entering Approved records the acting user in `erp_guard_approver`, in the same transaction, whichever way the order was approved. A Withdraw transition (Pending Approval to Draft, for the submitter) lets `amend_purchase_order` take a pending order back to Draft before changing its lines, as Revise does for a rejected one, so an amended order always needs resubmitting and an approval previewed before the change no longer applies. Revise and Withdraw are refused through `workflow_action`; they happen only inside an amendment. The Purchase Invoice and Payment Entry workflows record their approver the same way (`erp_guard_approver`), so the separation checks read who approved from ERPNext itself.
 
@@ -205,7 +215,7 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | Request split | PO create, submit, amend | A PO under $5,000 with no request, plus other live request-less POs to the same supplier and cost centre in the last 14 days, reaches $5,000 (v1's split rule, applied to the request threshold) | block |
 | Request approved | PO from a request | The request is approved; PO quantity per item ≤ approved quantity not yet ordered | block |
 | Request approval tier | request approval | Approver's limit covers the request's estimated value (items' last purchase price × qty) | block |
-| Competitive quotes | PO create, submit | PO total ≥ $25,000 needs ≥ 3 Supplier Quotations for its items from different suppliers in the last 90 days, or a sole-source reason | block |
+| Competitive quotes | PO create, submit | PO total ≥ $25,000 needs ≥ 3 Supplier Quotations for its items from different suppliers in the last 90 days, or a sole-source reason. Only quotes from suppliers usable at PO time and not onboarded by the PO's requester count. When the quotes satisfy the rule, the PO rate is also capped at the order supplier's own quoted rate | block |
 | Sole source | PO approve | A sole-source PO is approved by a director or above | block |
 | Quote price | PO from a quote | PO rate ≤ the quoted rate | block |
 | Over-receipt | receive | Received qty per line ≤ ordered − already received (draft and submitted receipts both count, returns subtract), plus the policy tolerance of 5%. ERPNext's own over-receipt allowance (0% at its defaults, which phase 1 keeps) applies as well, so the stricter limit wins: at defaults ERPNext refuses anything over the ordered quantity at submit time, and the receipt is inserted and submitted in one request so a refusal leaves no draft | block |
@@ -224,8 +234,9 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | Paid at entry | invoice | `is_paid` (paid on entry, which would skip payment checks) is never set | block |
 | Invoice separation | invoice approve | Approver is neither the person who entered the invoice nor the PO's requester | block |
 | Debit note limit | debit note | Debit note ≤ the original invoice's amount not already credited | block |
+| Pay a supplier | payment | The entry is a Pay to a Supplier. erp-guard drafts nothing else, but an entry made in ERPNext's UI (a Receive, an Internal Transfer, a Pay to an Employee) is blocked when it reaches erp-guard's workflow checks | block |
 | Pay only approved invoices | payment | Every reference is a submitted Purchase Invoice of this supplier, not on hold, with outstanding > 0. No unallocated or advance payments | block |
-| Amount owed | payment | Allocated amount per invoice ≤ outstanding | block |
+| Amount owed | payment | Allocated amount per invoice ≤ outstanding; several references to one invoice are summed first | block |
 | Duplicate payment | payment | Invoice already fully paid, or another draft or submitted payment references it | block |
 | | payment | Same supplier, same amount, different invoice, paid in the last 30 days | warn |
 | Payer separation | payment create | Payer is not the invoice's approver or the PO's requester | block |
@@ -239,6 +250,8 @@ v1's checks stay as they are (duplicate supplier, supplier usable, self-dealing,
 | Cancel payment | cancel | Only a payment approver who isn't the payer; reason required | block |
 | Edit after entry | update | Drafts only, by the person who entered them; every check for the document's create re-runs on the edited version | block |
 
+Every priced purchase document the pack builds (supplier quotation, order, receipt, invoice, debit note) is sent with `ignore_pricing_rule` set, so an ERPNext pricing rule can't change a rate after the preview checked it: what is written is what was checked.
+
 The duplicate-invoice and duplicate-payment amount rules reuse Spend Leakage Finder's tier definitions (`src/leakage/duplicates.py`: T2, same vendor and amount within 30 days; T4, near or transposed amount within 14 days); the vendor comparison is by supplier ID since entry is against the master.
 
 ### Policy additions
@@ -247,7 +260,7 @@ The duplicate-invoice and duplicate-payment amount rules reuse Spend Leakage Fin
 
 ### Seed additions
 
-- Users above with API keys in `.env`; workflows for the four document types.
+- Users above with API keys in `.env`; workflows for the five document types (the four purchase-to-pay ones and ERP Guard Change Request).
 - Items get stock or non-stock flags (goods are stock items into one warehouse, services non-stock, so both three-way and two-way matching are exercised), and a default warehouse.
 - A company bank account (ledger account) and mode of payment for treasury.
 - History extended: some approved POs get receipts, invoices and payments, so duplicate-invoice and duplicate-payment checks have something to match against.

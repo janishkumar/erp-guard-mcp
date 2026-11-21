@@ -47,6 +47,7 @@ from erp_guard.generic.actions import (
     meta_of,
     record_exists,
     same_value,
+    typed_fields,
 )
 from erp_guard.models import LIVE_STATUSES, PurchaseOrder
 from erp_guard.ops import Op, Write
@@ -362,7 +363,8 @@ def apply_create(svc: Service, w: Write) -> tuple[str, str]:
                     "person; nothing has been created yet. Someone else with a purchase "
                     f"approval limit creates it with workflow_action(\"{CHANGE_REQUEST}\", "
                     f"\"{cr}\", \"Approve\").")
-    doc = svc.erp.insert({**w.fields, "doctype": w.doctype})
+    fields = typed_fields(meta_of(svc, w.doctype)[0], w.fields)
+    doc = svc.erp.insert({**fields, "doctype": w.doctype})
     return doc["name"], f"{w.doctype} {doc['name']} created."
 
 
@@ -403,7 +405,7 @@ def apply_update(svc: Service, w: Write) -> tuple[str, str]:
                     f"has changed yet. Someone else with a purchase approval limit applies it "
                     f"with "
                     f"workflow_action(\"{CHANGE_REQUEST}\", \"{cr}\", \"Approve\").")
-    svc.erp.save({**current, **w.fields})
+    svc.erp.save({**current, **typed_fields(meta_of(svc, w.doctype)[0], w.fields)})
     return w.name, f"{w.doctype} {w.name} updated."
 
 

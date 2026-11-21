@@ -1213,6 +1213,16 @@ class ErpNext:
         self.call(PO_UPDATE_STATUS, status="Closed", name=po)
         return self.get_order(po)
 
+    def _typed(self, doctype: str, fields: dict) -> dict:
+        """Requested values as the generic writes send them: numeric field types as JSON
+        numbers (the request keeps the canonical text the code was bound to)."""
+        from erp_guard.generic.actions import typed_fields
+        from erp_guard.generic.meta import doc_meta
+        raw = self.get_meta(doctype)
+        meta = doc_meta({"docs": [raw, *raw.get("child_doctypes", {}).values()]},
+                        has_workflow=bool(raw.get("__workflow_docs")))
+        return typed_fields(meta, fields)
+
     def create_change_request(self, target_doctype, target_name, fields):
         """An ERP Guard Change Request, submitted for approval by a second person. With an
         empty target name it asks for a new document of the type. Bank details are refused
@@ -1238,12 +1248,13 @@ class ErpNext:
         if (cr.get("docstatus"), cr.get("workflow_state")) != (0, "Pending Approval"):
             raise ErpError(f"Change request {id} isn't pending")
         made = None
+        if approve:
+            fields = self._typed(cr["target_doctype"], json.loads(cr["fields_json"]))
         if approve and cr.get("target_name"):
             target = self._require(cr["target_doctype"], cr["target_name"])
-            self.save({**target, **json.loads(cr["fields_json"])})
+            self.save({**target, **fields})
         elif approve:
-            made = self.insert({**json.loads(cr["fields_json"]),
-                                "doctype": cr["target_doctype"]})["name"]
+            made = self.insert({**fields, "doctype": cr["target_doctype"]})["name"]
         self.apply_workflow(CHANGE_REQUEST, id, APPROVE if approve else REJECT)
         body = {"status": "Applied" if approve else "Rejected", "decided_by": self.whoami()}
         if made:

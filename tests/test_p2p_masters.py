@@ -486,3 +486,27 @@ def test_get_meta_of_unknown_doctype_raises_erp_error():
                                transport=httpx.MockTransport(handler)), CO)
     with pytest.raises(ErpError, match="No DocType 'Nope'"):
         erp.get_meta("Nope")
+
+
+def test_master_writes_send_numbers_as_numbers(svc, fake, policy):
+    """As the generic writes (Ruling 33): numeric field types reach ERPNext as JSON
+    numbers on the direct path, on create and when a change request is applied."""
+    args = update("Item", "TONER-K", safety_stock="5.5", min_order_qty="2")
+    p = svc.preview("update_document", args)
+    assert svc.execute("update_document", args, p.code).outcome == "written"
+    item = fake.docs[("Item", "TONER-K")]
+    assert (item["safety_stock"], item["min_order_qty"]) == (5.5, 2.0)
+    fake.add({"doctype": "Price List", "name": "Standard Buying"})
+    new = {"doctype": "Item Price", "fields": {"item_code": "TONER-K", "uom": "Nos",
+                                               "price_list": "Standard Buying",
+                                               "price_list_rate": "88.5"}}
+    p = svc.preview("create_document", new)
+    out = svc.execute("create_document", new, p.code)
+    assert out.outcome == "written", out.message
+    assert fake.docs[("Item Price", out.target)]["price_list_rate"] == 88.5
+    cr = make_cr(svc, fake, "Item Price", out.target, price_list_rate="91.25")
+    mgr = as_user(fake, policy, MGR)
+    p = mgr.preview("workflow_action", decide(cr, "Approve"))
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    assert mgr.execute("workflow_action", decide(cr, "Approve"), p.code).outcome == "written"
+    assert fake.docs[("Item Price", out.target)]["price_list_rate"] == 91.25

@@ -216,6 +216,10 @@ class FrappeClient:
         elif name in WRITE_METHODS:
             if verb != "POST":
                 raise HardLimitError(f"{name} is sent with POST only")
+            if name == PO_UPDATE_STATUS and not (isinstance(body, dict)
+                                                 and body.get("status") == "Closed"):
+                # update_status also re-opens or holds an order; erp-guard only closes.
+                raise HardLimitError(f"{name} is sent with status Closed only")
             for target, creating in self._write_targets(name, body):
                 self._require_writable(target, creating)
         if body is not None:

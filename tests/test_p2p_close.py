@@ -293,3 +293,19 @@ def test_connector_without_orders_receipts_is_refused(policy):
     p = Service(Bare(), policy, today=lambda: TODAY).preview("close_purchase_order",
                                                              {"po": CL})
     assert p.code is None and _levels(p, "connector") == [BLOCK]
+
+
+def test_return_goods_on_a_closed_order_is_allowed(erp, policy):
+    """Pinned behaviour: closing stops new receipts and invoices, but faulty goods already
+    received can still be sent back (the return is a fact about goods on hand, and its own
+    limit check applies)."""
+    _complete(erp)
+    as_user(erp, policy, REQ2).erp.close_order(CL, "done")
+    svc = as_user(erp, policy, RCV)
+    args = {"receipt": "PR-1", "lines": [{"item_code": "SALT-TON", "qty": 2}],
+            "reason": "two bags split"}
+    p = svc.preview("return_goods", args)
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    out = svc.execute("return_goods", args, p.code)
+    assert out.outcome == "written", out.message
+    assert erp.get_receipt(out.target).is_return and erp.get_order(CL).closed

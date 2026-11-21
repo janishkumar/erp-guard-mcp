@@ -354,3 +354,18 @@ def test_child_rows_never_written_on_their_own():
         with pytest.raises(HardLimitError, match="through their parent"):
             c.request(verb, path, body={"parent": "PO-1", "qty": 5})
     assert not seen
+
+
+@pytest.mark.parametrize("status", ["To Receive and Bill", "Completed", "On Hold", "", None,
+                                    "closed"])
+def test_update_status_only_closes(status):
+    """ERPNext's update_status can also re-open or hold an order; the client sends Closed
+    only."""
+    seen = []
+    c = _client(seen, writable=lambda d: True)
+    path = "/api/method/erpnext.buying.doctype.purchase_order.purchase_order.update_status"
+    with pytest.raises(HardLimitError, match="Closed"):
+        c.request("POST", path, body={"status": status, "name": "PO-1"})
+    assert not seen
+    c.request("POST", path, body={"status": "Closed", "name": "PO-1"})
+    assert len(seen) == 1

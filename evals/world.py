@@ -434,8 +434,13 @@ class World:
         for name in self.new("Purchase Order"):  # ERPNext's own re-open: a closed order's
             o = d.get_order(name)                # receipts and invoices can't be cancelled
             if o is not None and o.closed and o.status != Status.CANCELLED:
+                # Sent past the client's limits (which allow closing only): cleanup, not
+                # something a tool can do.
                 from erp_guard.connectors.erpnext import PO_UPDATE_STATUS
-                d.call(PO_UPDATE_STATUS, status="Submitted", name=name)
+                r = d.c.http.post(f"/api/method/{PO_UPDATE_STATUS}",
+                                  json={"status": "Submitted", "name": name})
+                if r.status_code >= 400:
+                    problems.append(f"Purchase Order {name}: re-open failed ({r.text[:200]})")
         for doctype, user in P2P_DOCTYPES:
             erp = self.connector(user)
             for name in reversed(self.new(doctype)):

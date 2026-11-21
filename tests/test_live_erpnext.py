@@ -16,7 +16,7 @@ import pytest
 
 from erp_guard import demo
 from erp_guard.connectors.base import ErpError
-from erp_guard.connectors.erpnext import ErpNext, HardLimitError
+from erp_guard.connectors.erpnext import PO_UPDATE_STATUS, ErpNext, HardLimitError
 from erp_guard.env import load_env
 from erp_guard.generic.actions import meta_of
 from erp_guard.models import Line, Status
@@ -1035,15 +1035,19 @@ def test_live_close_order(created):
     assert o.closed and o.status == Status.APPROVED
     assert req.get_doc("Purchase Order", po)["erp_guard_reason"] == "no longer needed"
     assert not [x for x in req.list_orders(cost_centre=CC) if x.id == po and not x.closed]
-    req.call("erpnext.buying.doctype.purchase_order.purchase_order.update_status",
-             status="Submitted", name=po)  # ERPNext's re-open
+    # The client only ever closes: re-opening is refused before anything is sent.
+    with pytest.raises(HardLimitError, match="Closed only"):
+        req.call(PO_UPDATE_STATUS, status="Submitted", name=po)
+    _reopen(req, po)
     assert not req.get_order(po).closed
 
 
 def _reopen(erp, po: str) -> None:
-    """ERPNext's own re-open, so a closed test order can be cancelled with what hangs off it."""
-    erp.call("erpnext.buying.doctype.purchase_order.purchase_order.update_status",
-             status="Submitted", name=po)
+    """ERPNext's own re-open, so a closed test order can be cancelled with what hangs off it.
+    Test cleanup only: sent past the client's limits, which allow closing and nothing else."""
+    r = erp.c.http.post(f"/api/method/{PO_UPDATE_STATUS}",
+                        json={"status": "Submitted", "name": po})
+    assert r.status_code == 200, r.text
 
 
 def test_live_close(created, undo):

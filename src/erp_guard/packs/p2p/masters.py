@@ -63,11 +63,14 @@ ANY = "*"
 # Supplier also lists its primary address and contact: pointing a supplier at another
 # address is the same change as editing its address.
 CHECK_FIELDS: dict[str, frozenset[str]] = {
-    "Item": frozenset({"is_stock_item", "stock_uom", "item_group", "disabled"}),
+    "Item": frozenset({"is_stock_item", "stock_uom", "item_group", "disabled", "taxes",
+                       "uoms"}),
     "Item Price": frozenset({"price_list_rate", "item_code", "price_list", "uom",
                              "valid_from", "valid_upto", "supplier"}),
     "Supplier": frozenset({"supplier_name", "tax_id", "disabled", "on_hold",
-                           "supplier_primary_address", "supplier_primary_contact"}),
+                           "supplier_primary_address", "supplier_primary_contact",
+                           "accounts", "is_internal_supplier", "represents_company",
+                           "payment_terms"}),
     "Address": frozenset({ANY}),
     "Contact": frozenset({ANY}),
     "Warehouse": frozenset({ANY}),
@@ -110,8 +113,9 @@ def supplier_links(doc: dict | None) -> set[str]:
     if not isinstance(rows, list):
         return set()
     return {r["link_name"] for r in rows if isinstance(r, dict)
-            and r.get("link_doctype") == "Supplier" and isinstance(r.get("link_name"), str)
-            and r["link_name"]}
+            and isinstance(r.get("link_doctype"), str)
+            and r["link_doctype"].strip().casefold() == "supplier"
+            and isinstance(r.get("link_name"), str) and r["link_name"]}
 
 
 def owns_write(svc: Service, w: Write) -> bool:

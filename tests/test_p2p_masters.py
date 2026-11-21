@@ -440,3 +440,49 @@ def test_item_price_item_and_unit_changes_need_a_second_person(svc, fake):
     assert p.code and by_check(p, "second person")[0].level == PASS
     p = svc.preview("update_document", update("Item Price", "IP-2", note="x"))
     assert p.code and by_check(p, "master data")[0].level == PASS
+
+
+@pytest.mark.parametrize("link_doctype", ["supplier", " Supplier ", "SUPPLIER"])
+def test_supplier_link_doctype_compared_loosely(link_doctype):
+    from erp_guard.packs.p2p.masters import supplier_links
+    doc = {"links": [{"link_doctype": link_doctype, "link_name": "TRANE U.S. INC"},
+                     {"link_doctype": "Customer", "link_name": "X"}]}
+    assert supplier_links(doc) == {"TRANE U.S. INC"}
+
+
+def test_address_linked_with_odd_case_is_still_the_packs(svc, fake):
+    link = [{"link_doctype": "supplier ", "link_name": "TRANE U.S. INC"}]
+    p = svc.preview("update_document", update("Address", "Depot-Office", links=link))
+    assert by_check(p, "scope")[0].evidence == {"scope": "pack"}
+    assert "change request" in p.summary
+
+
+@pytest.mark.parametrize("fields", [
+    {"accounts": [{"company": CO, "account": "Creditors - LDU"}]},
+    {"is_internal_supplier": 1}, {"represents_company": CO},
+    {"payment_terms": "Net 30"}])
+def test_supplier_account_and_terms_changes_need_a_second_person(svc, fake, fields):
+    for doctype, name in (("Payment Terms Template", "Net 30"), ("Company", CO),
+                          ("Account", "Creditors - LDU")):
+        fake.add({"doctype": doctype, "name": name})
+    p = svc.preview("update_document", update("Supplier", "TRANE U.S. INC", **fields))
+    assert p.code, [r.message for r in p.checks if r.level == BLOCK]
+    assert "change request" in p.summary, p.summary
+
+
+def test_item_taxes_and_uoms_are_check_fields():
+    from erp_guard.packs.p2p.masters import CHECK_FIELDS
+    assert {"taxes", "uoms"} <= CHECK_FIELDS["Item"]
+
+
+def test_get_meta_of_unknown_doctype_raises_erp_error():
+    import httpx
+
+    from erp_guard.connectors.erpnext import ErpNext, FrappeClient
+
+    def handler(req):
+        return httpx.Response(200, json={"docs": [{"name": "Something Else"}]})
+    erp = ErpNext(FrappeClient("http://erp.local", "k", "s",
+                               transport=httpx.MockTransport(handler)), CO)
+    with pytest.raises(ErpError, match="No DocType 'Nope'"):
+        erp.get_meta("Nope")

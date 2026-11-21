@@ -571,7 +571,9 @@ class ErpNext:
         if doctype not in self._meta:
             docs = self.c.request("GET", "/api/method/frappe.desk.form.load.getdoctype",
                                   params={"doctype": doctype})["docs"]
-            main = next(d for d in docs if d["name"] == doctype)
+            main = next((d for d in docs if d.get("name") == doctype), None)
+            if main is None:
+                raise ErpError(f"No DocType '{doctype}'")
             self._meta[doctype] = {**main, "child_doctypes": {
                 d["name"]: d for d in docs if d["name"] != doctype}}
         return self._meta[doctype]

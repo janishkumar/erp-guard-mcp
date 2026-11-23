@@ -149,6 +149,10 @@ class P2PPack:
     def owns_write(self, svc: Service, w: Write) -> bool:
         return masters.owns_write(svc, w)
 
+    def also_acts_on(self, svc: Service, doctype: str, name: str) -> list[tuple[str, str]]:
+        """Deciding a change request also saves the record it changes."""
+        return masters.also_acts_on(svc, doctype, name)
+
     def _route(self, svc: Service, w: Write) -> tuple[str, dict] | CheckResult:
         """The pack action and its canonical arguments for this write, or why not."""
         if (w.doctype, w.op) == ("Purchase Order", Op.CREATE):

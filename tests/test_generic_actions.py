@@ -454,3 +454,63 @@ def test_generic_write_sends_numbers_as_numbers(svc, fake):
     row = sent["credit_limits"][0]
     assert row["credit_limit"] == 5000.0 and isinstance(row["credit_limit"], float)
     assert row["company"] == "Lakeside Demo Utilities"
+
+
+# --- fail closed, finite numbers, unexpected write errors ------------------------------
+
+def _unreadable_version(fake):
+    fake.docs[("Task", "TASK-1")]["modified"] = ""
+
+
+def test_a_target_whose_version_cannot_be_read_gets_no_code(svc, fake):
+    from erp_guard.connectors.base import ErpError
+    args = {"doctype": "Task", "name": "TASK-1", "fields": {"subject": "b"}}
+    _unreadable_version(fake)
+    with pytest.raises(ErpError, match="can't read the version of Task TASK-1"):
+        svc.preview("update_document", args)
+
+
+def test_an_unreadable_version_still_shows_a_blocked_preview(svc, fake):
+    args = {"doctype": "Task", "name": "TASK-1", "fields": {"no_such_field": "x"}}
+    assert svc.preview("update_document", args).blocked
+    _unreadable_version(fake)
+    p = svc.preview("update_document", args)
+    assert p.blocked and p.code is None
+
+
+def test_an_unreadable_version_at_execute_is_audited_as_an_error(svc, fake):
+    args = {"doctype": "Task", "name": "TASK-1", "fields": {"subject": "b"}}
+    canon = canonical_args("update_document", args, svc.actions)
+    code = svc.codes.issue("update_document", svc.actor,
+                           payload_hash("update_document", svc.actor, canon), "[]")
+    _unreadable_version(fake)
+    out = svc.execute("update_document", args, code)
+    assert out.outcome == "error" and "can't read the version" in out.message
+    assert fake.audit()[-1]["outcome"] == "error"
+
+
+def test_a_write_on_a_missing_document_is_blocked_with_no_code(svc):
+    p = svc.preview("update_document", {"doctype": "Task", "name": "TASK-NOPE",
+                                        "fields": {"subject": "b"}})
+    assert p.blocked and p.code is None
+
+
+def test_number_never_returns_a_non_finite_float():
+    from erp_guard.generic.actions import _number
+    assert _number("1e400", "Float") == "1e400"
+    assert _number("-1e400", "Currency") == "-1e400"
+    assert _number("2.5", "Float") == 2.5 and _number("7", "Int") == 7
+
+
+def test_an_unexpected_exception_in_the_write_is_audited(svc, fake):
+    args = {"doctype": "Task", "name": "TASK-1", "fields": {"subject": "b"}}
+    p = svc.preview("update_document", args)
+    assert p.code
+
+    def boom(action, canon):
+        raise KeyError("surprise")
+    svc._write = boom
+    out = svc.execute("update_document", args, p.code)
+    assert out.outcome == "error" and "KeyError" in out.message and "surprise" in out.message
+    rec = fake.audit()[-1]
+    assert rec["outcome"] == "error" and rec["action"] == "update_document"

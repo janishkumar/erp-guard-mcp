@@ -435,6 +435,16 @@ def _requested(cr: dict) -> tuple[str, str, dict] | str:
     return target_dt, target, fields
 
 
+def also_acts_on(svc: Service, doctype: str, name: str) -> list[tuple[str, str]]:
+    """The master record a change request changes (none for a new Address or Contact)."""
+    if doctype != CHANGE_REQUEST:
+        return []
+    cr = svc.erp.get_doc(CHANGE_REQUEST, name)
+    if cr and cr.get("target_name") and cr.get("target_doctype") in MASTERS:
+        return [(cr["target_doctype"], cr["target_name"])]
+    return []
+
+
 def _decider(actor: str, cr: dict, ref: str) -> C.CheckResult:
     by, maker = cr.get("requested_by") or "", cr.get("owner") or ""
     if actor in (by, maker):

@@ -510,3 +510,41 @@ def test_master_writes_send_numbers_as_numbers(svc, fake, policy):
     assert p.code, [r.message for r in p.checks if r.level == BLOCK]
     assert mgr.execute("workflow_action", decide(cr, "Approve"), p.code).outcome == "written"
     assert fake.docs[("Item Price", out.target)]["price_list_rate"] == 91.25
+
+
+# --- the approver's code binds the record the request changes --------------------------
+
+def test_change_request_approval_is_bound_to_the_target_record(svc, fake, policy):
+    cr = make_cr(svc, fake, "Supplier", "TRANE U.S. INC", tax_id="11-1111111")
+    mgr = as_user(fake, policy, MGR)
+    p = mgr.preview("workflow_action", decide(cr, "Approve"))
+    assert p.code
+    # The supplier is changed meanwhile: the approver never saw this value.
+    fake._touch(fake.docs[("Supplier", "TRANE U.S. INC")])
+    fake.docs[("Supplier", "TRANE U.S. INC")]["tax_id"] = "99-9999999"
+    out = mgr.execute("workflow_action", decide(cr, "Approve"), p.code)
+    assert out.outcome == "refused" and "changed after the preview" in out.message
+    assert fake.docs[("Supplier", "TRANE U.S. INC")]["tax_id"] == "99-9999999"
+    assert fake.docs[(CR, cr)]["workflow_state"] == "Pending Approval"
+    assert fake.audit()[-1]["outcome"] == "refused"
+
+
+def test_change_request_approval_with_unchanged_target_is_written(svc, fake, policy):
+    cr = make_cr(svc, fake, "Supplier", "TRANE U.S. INC", tax_id="11-1111111")
+    mgr = as_user(fake, policy, MGR)
+    p = mgr.preview("workflow_action", decide(cr, "Approve"))
+    out = mgr.execute("workflow_action", decide(cr, "Approve"), p.code)
+    assert out.outcome == "written", out.message
+    assert fake.docs[("Supplier", "TRANE U.S. INC")]["tax_id"] == "11-1111111"
+
+
+def test_create_type_change_request_is_still_approvable(svc, fake, policy):
+    fake.docs[("Purchase Invoice", "PI-1")]["outstanding_amount"] = 0
+    out = svc.execute("create_document", new_address(), svc.preview(
+        "create_document", new_address()).code)
+    assert out.outcome == "written", out.message
+    mgr = as_user(fake, policy, MGR)
+    p = mgr.preview("workflow_action", decide(out.target, "Approve"))
+    assert p.code
+    assert mgr.execute("workflow_action", decide(out.target, "Approve"),
+                       p.code).outcome == "written"

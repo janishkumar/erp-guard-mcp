@@ -34,3 +34,7 @@ class Pack(Protocol):
     def apply_write(self, svc: Service, w: Write) -> tuple[str, str]:
         """Do the write; (target id, message)."""
         ...
+
+    # Optional: `also_acts_on(svc, doctype, name) -> list[(doctype, name)]`. The existing
+    # documents a write on this one also saves (beyond the one named); a confirmation code
+    # binds their version too. Packs without it act on the named document only.

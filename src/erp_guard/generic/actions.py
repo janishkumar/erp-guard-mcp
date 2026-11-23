@@ -11,6 +11,7 @@ generic checks.
 from __future__ import annotations
 
 import json
+import math
 from decimal import Decimal, InvalidOperation
 from functools import cache
 from typing import TYPE_CHECKING
@@ -360,7 +361,8 @@ def _number(text: str, fieldtype: str):
         return text
     if fieldtype == "Int" and d == d.to_integral_value():
         return int(d)
-    return float(d)
+    f = float(d)
+    return f if math.isfinite(f) else text  # "1e400" would be inf: ERPNext says why
 
 
 def typed_fields(meta: DocMeta, fields: dict) -> dict:

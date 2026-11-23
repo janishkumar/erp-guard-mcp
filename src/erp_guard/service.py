@@ -182,6 +182,11 @@ class Outcome:
     audit_id: str | None = None
 
 
+def _what(exc: Exception) -> str:
+    """How an error reads in an outcome and the audit trail."""
+    return f"ERP error: {exc}" if isinstance(exc, ErpError) else f"{type(exc).__name__}: {exc}"
+
+
 # --- actions -------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -278,7 +283,19 @@ class Service:
         if version is None:
             raise ErpError(f"The {self.erp.name} connector can't tell whether a document "
                            "changed, so no code is issued for a write on one.")
-        return json.dumps([[dt, name, version(dt, name)] for dt, name in targets(canon)])
+        docs = list(targets(canon))
+        # A pack may know the write also saves documents the action doesn't name.
+        hook = getattr(self.pack_for(canon.get("doctype") or ""), "also_acts_on", None)
+        if hook is not None and canon.get("name"):
+            docs += [d for d in hook(self, canon["doctype"], canon["name"]) if d not in docs]
+        out = []
+        for dt, name in docs:
+            v = version(dt, name)
+            if not v:
+                raise ErpError(f"can't read the version of {dt} {name}, so no code is "
+                               "issued for a write on it.")
+            out.append([dt, name, v])
+        return json.dumps(out)
 
     # public API -----------------------------------------------------------------------
 
@@ -319,9 +336,8 @@ class Service:
                                    digest)
             _, results = self.evaluate(action, canon)  # fresh data, not the preview's
         except Exception as exc:  # the code is burned: audit the failure, never escape
-            what = f"ERP error: {exc}" if isinstance(exc, ErpError) else \
-                f"{type(exc).__name__}: {exc}"
-            return self._audit(Outcome(action, "error", f"Write-time check failed. {what}",
+            return self._audit(Outcome(action, "error",
+                                       f"Write-time check failed. {_what(exc)}",
                                        target=target), actor, digest)
         if C.blocked(results):
             msg = "Blocked at write time: " + " ".join(
@@ -330,8 +346,8 @@ class Service:
 
         try:
             target, msg = self._write(action, canon)
-        except ErpError as exc:
-            return self._audit(Outcome(action, "error", f"ERP error: {exc}", results, target),
+        except Exception as exc:  # audit whatever went wrong, never escape
+            return self._audit(Outcome(action, "error", _what(exc), results, target),
                                actor, digest)
         return self._audit(Outcome(action, "written", msg, results, target), actor, digest)
 

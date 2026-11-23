@@ -96,7 +96,7 @@ Approvers hold Accounts User because ERPNext submits a document as the user who 
 
 No demo user holds the CFO tier, so anything above $250K can't be approved in the demo, on purpose: the eval checks it stays unapproved.
 
-## The write protocol (unchanged)
+## The write protocol
 
 1. **Preview** (read-only): takes the write tool's name and exact arguments, canonicalises them, runs every check, and returns what would change, each check's result with evidence, and, only if nothing blocks, a one-time code bound to (action, actor, sha256 of the canonical arguments) and to the version of every existing document the write acts on (ERPNext's `modified`; the in-memory ERP's change counter; a hash of the order as read on SAP). The version is read before the checks run.
 2. **Write** with the code. Codes are 8 characters, single use (burned on any attempt), 15 minutes, in memory. If a target document changed after the preview, the write is refused ("the document changed after the preview; preview again") and audited. On ERPNext and the in-memory ERP that holds even when the document is back in the state the preview saw, since any save changes the version.
@@ -166,6 +166,7 @@ A change that needs a second person is recorded as an `ERP Guard Change Request`
 - **Create-type**: `create_document` of an Address or Contact linked to a supplier. The request has no target name; approving it inserts the new document and records its name as the target. A Supplier itself is created only by `onboard_supplier`.
 - **Second person**: decided with `workflow_action` (Approve, or Reject with a comment) by a purchase approver, meaning a user with a purchase-order approval limit in `config/policy.toml`, who neither asked for the change nor made the request, on a request nobody has changed since it was submitted.
 - **Open documents**: the change is blocked while open documents reference the record (live orders, unpaid invoices, draft or pending payments, receipts and invoices with the item), checked when the request is made and again when it is approved.
+- **Code binding**: the approver's code binds the version of both the request and the record it changes (a pack's `also_acts_on` hook), so a change to that record after the preview makes the code stale. A write whose target's version can't be read gets no code.
 - **Order of writes**: on approval the change is saved on the target (or the new document inserted) first, and only then is the request approved and marked Applied. If the save fails, the request stays pending.
 
 ### Approvals on ERPNext workflows

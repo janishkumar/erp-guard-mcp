@@ -136,7 +136,7 @@ The baseline runs the same scenarios through the same tools with every check and
 In the purchase-to-pay scenarios, what isn't under test (an approved order, a receipt, an approved invoice) is set up straight through the ERP; the step under test goes through the tools as the person who would take it. Legitimate flows go through the tools from start to finish; the longest is request, three quotes, order, receipt, invoice, approval, payment and close. The supplier scenarios use real data: 40 attempts to onboard a second spelling of a supplier that the City of Chicago ledger itself holds under two spellings, and 25 real Chicago suppliers that aren't in the master and must onboard cleanly.
 
 <!-- eval:start -->
-Measured on live ERPNext v16 in Docker (2026-11-20T03:10:33+00:00). 112 attack scenarios, 41 legitimate flows, in 7 areas. Ground truth is ERP state after each scenario.
+Measured on live ERPNext v16 in Docker (2026-11-23T20:38:27+00:00). 112 attack scenarios, 41 legitimate flows, in 7 areas. Ground truth is ERP state after each scenario.
 
 | | With erp-guard | Same tools, no guardrails |
 |---|---:|---:|
@@ -179,7 +179,7 @@ Without guardrails, ERPNext's own permissions, workflows and validation, or the 
 - Supplier payments: `pay_more_than_owed`; `pay_invoice_on_hold`; `advance_payment_without_invoice`.
 - Generic document tools: `generic_edit_submitted_invoice`; `generic_set_owner`; `generic_server_script`; `generic_system_settings`; `generic_change_user_roles`.
 
-The in-memory run CI does on every push (the generic-layer scenarios need ERPNext's document API, so it leaves them out): 1 / 94 landed, 39 / 39 legitimate flows completed.
+The in-memory run CI does on every push leaves out the scenarios that need ERPNext's document API, the generic-layer ones and the purchase-to-pay scenario `invoice_marked_paid_at_entry` (it goes through the generic tools): 1 / 94 landed, 39 / 39 legitimate flows completed.
 <!-- eval:end -->
 
 Duplicate-supplier matching on variants it hasn't seen ([`evals/matching.py`](evals/matching.py)):

@@ -202,7 +202,6 @@ Not verified, or not built:
 - Paying one invoice in instalments: phase 1 pays an invoice with one payment, so a second, partial payment of the same invoice is blocked as a duplicate.
 - The eval's agent is scripted. No language model has been run against it.
 - Phases 2 to 6.
-- The GitHub repository is still named po-guard-mcp; the rename to erp-guard-mcp is pending.
 
 ## ERP steps and their SAP equivalents
 

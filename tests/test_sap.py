@@ -9,12 +9,12 @@ from pathlib import Path
 import httpx
 import pytest
 
-from po_guard.connectors.base import ErpError
-from po_guard.connectors.erpnext import HardLimitError
-from po_guard.connectors.sap import BP_SERVICE, PO_SERVICE, ODataClient, SapS4
-from po_guard.models import Line, Status
-from po_guard.policy import load_policy
-from po_guard.service import Service
+from erp_guard.connectors.base import ErpError
+from erp_guard.connectors.erpnext import HardLimitError
+from erp_guard.connectors.sap import BP_SERVICE, PO_SERVICE, ODataClient, SapS4
+from erp_guard.models import Line, Status
+from erp_guard.policy import load_policy
+from erp_guard.service import Service
 
 FIX = Path(__file__).parent / "fixtures" / "sap"
 
@@ -131,6 +131,8 @@ def test_guardrails_run_on_sap_too(sap):
             "lines": [{"item_code": "TG11", "qty": 400, "rate": 46}]}
     p = svc.preview("create_purchase_order", args)
     assert {r.check: r.level for r in p.checks}["budget"] == "block"
+    # SAP doesn't model purchase requests yet, so $5,000 or more can't show one.
+    assert {r.check: r.level for r in p.checks}["connector"] == "block"
     small = {**args, "lines": [{"item_code": "TG11", "qty": 4, "rate": 46}]}
     p = svc.preview("create_purchase_order", small)
     out = svc.execute("create_purchase_order", small, p.code)
@@ -143,3 +145,12 @@ def test_from_env_needs_key_for_sandbox(monkeypatch):
     monkeypatch.delenv("SAP_BASE_URL", raising=False)
     with pytest.raises(SystemExit):
         SapS4.from_env()
+
+
+def test_doc_version_is_a_hash_of_the_order(sap):
+    a, b = sap.doc_version("Purchase Order", "4500000101"), \
+        sap.doc_version("Purchase Order", "4500000102")
+    assert a and b and a != b and a == sap.doc_version("Purchase Order", "4500000101")
+    assert sap.doc_version("Purchase Order", "9999999999") == ""
+    with pytest.raises(ErpError, match="doesn't write"):
+        sap.doc_version("Supplier", "17300002")

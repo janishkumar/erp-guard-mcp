@@ -16,9 +16,9 @@ import random
 import re
 from pathlib import Path
 
-from po_guard import demo
-from po_guard.matching import match_supplier_name
-from po_guard.policy import load_policy
+from erp_guard import demo
+from erp_guard.matching import match_supplier_name
+from erp_guard.policy import load_policy
 
 OUT = Path(__file__).resolve().parent / "results" / "matching.json"
 

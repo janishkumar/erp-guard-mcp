@@ -1,0 +1,231 @@
+"""The purchase-to-pay pack as the generic tools see it: which document types it owns, and
+which (document type, operation) pairs it supports.
+
+Supported so far, each by translating the generic write onto the v1 tool for the same step
+and running its checks: creating a Purchase Order (`create_purchase_order`), and its
+workflow actions Submit for Approval, Approve and Reject (`submit_for_approval`,
+`approve_purchase_order`, `reject_purchase_order`, the comment being the reason). Revise
+and Withdraw happen only inside `amend_purchase_order`. Cancelling a Purchase Receipt runs
+its own checks (packs.p2p.receipts); receipts are otherwise written by `receive_goods` and
+`return_goods`. A Purchase Invoice's workflow actions, draft edits and cancellation run the
+invoice checks (packs.p2p.invoices); invoices and debit notes are entered by
+`enter_supplier_invoice` and `enter_debit_note`. A Payment Entry's workflow actions, draft
+edits and cancellation run the payment checks (packs.p2p.payments); payments are entered by
+`pay_supplier`. A Material Request's workflow actions run the purchase request checks, and
+submitting a Request for Quotation or a Supplier Quotation runs the quote checks, as do
+draft edits of requests and quotations and cancelling any of the three
+(packs.p2p.requests); they are raised by `raise_purchase_request`, `request_quotes` and
+`enter_supplier_quote`. Creating and updating master data (Item, Item Price, Price List,
+Warehouse, a Supplier's details, and Addresses and Contacts linked to a supplier) runs the
+master-data checks, where a change the checks read becomes an ERP Guard Change Request,
+which a second person approves or rejects with workflow_action (packs.p2p.masters); a
+Supplier is created with `onboard_supplier`, and an Address or Contact not linked to a
+supplier is left to the generic checks. Every other operation on a P2P-owned type is
+refused until its task tools land.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from erp_guard.checks import BLOCK, CheckResult
+from erp_guard.connectors.base import ErpError
+from erp_guard.ops import Op, Write
+from erp_guard.packs.p2p import (
+    APPROVE,
+    P2P_OWNED,
+    REJECT,
+    REVISE,
+    SUBMIT_FOR_APPROVAL,
+    WITHDRAW,
+    invoices,
+    masters,
+    payments,
+    receipts,
+    requests,
+)
+
+if TYPE_CHECKING:
+    from erp_guard.service import Service
+
+# Generic Purchase Order field -> create_purchase_order argument.
+_PO_HEADER = {"supplier": "supplier", "erp_guard_cost_centre": "cost_centre",
+              "erp_guard_notes": "notes", "items": "lines"}
+_PO_ROW = ("item_code", "qty", "rate", "description")
+# Purchase Order workflow action -> (v1 action, the argument the comment becomes, if any).
+_PO_WORKFLOW: dict[str, tuple[str, str | None]] = {
+    SUBMIT_FOR_APPROVAL: ("submit_for_approval", None),
+    APPROVE: ("approve_purchase_order", "comment"),
+    REJECT: ("reject_purchase_order", "reason"),
+}
+
+
+# (document type, operation) -> (evaluate, write) for writes with checks of their own and no
+# v1-style action behind them.
+_DIRECT = {
+    ("Purchase Receipt", Op.CANCEL): (receipts.evaluate_cancel, receipts.apply_cancel),
+    ("Purchase Invoice", Op.WORKFLOW): (invoices.evaluate_workflow, invoices.apply_workflow),
+    ("Purchase Invoice", Op.UPDATE): (invoices.evaluate_update, invoices.apply_update),
+    ("Purchase Invoice", Op.CANCEL): (invoices.evaluate_cancel, invoices.apply_cancel),
+    ("Payment Entry", Op.WORKFLOW): (payments.evaluate_workflow, payments.apply_workflow),
+    ("Payment Entry", Op.UPDATE): (payments.evaluate_update, payments.apply_update),
+    ("Payment Entry", Op.CANCEL): (payments.evaluate_cancel, payments.apply_cancel),
+    ("Material Request", Op.WORKFLOW): (requests.evaluate_workflow, requests.apply_workflow),
+    ("Request for Quotation", Op.SUBMIT): (requests.evaluate_submit_rfq,
+                                           requests.apply_submit),
+    ("Supplier Quotation", Op.SUBMIT): (requests.evaluate_submit_quote, requests.apply_submit),
+    ("Material Request", Op.UPDATE): (requests.evaluate_update, requests.apply_update),
+    ("Supplier Quotation", Op.UPDATE): (requests.evaluate_update, requests.apply_update),
+    ("Material Request", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
+    ("Request for Quotation", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
+    ("Supplier Quotation", Op.CANCEL): (requests.evaluate_cancel, requests.apply_cancel),
+    (masters.CHANGE_REQUEST, Op.WORKFLOW): (masters.evaluate_decision,
+                                            masters.apply_decision),
+    **{(dt, Op.CREATE): (masters.evaluate_create, masters.apply_create)
+       for dt in masters.MASTERS - {"Supplier"}},
+    **{(dt, Op.UPDATE): (masters.evaluate_update, masters.apply_update)
+       for dt in masters.MASTERS},
+}
+# Unsupported operations whose step has a tool: the refusal names it.
+_INSTEAD = {
+    ("Purchase Invoice", Op.CREATE): "enter invoices with enter_supplier_invoice and debit "
+                                     "notes with enter_debit_note",
+    ("Purchase Invoice", Op.SUBMIT): "an invoice is submitted by approving it with "
+                                     "workflow_action",
+    ("Purchase Invoice", Op.AMEND): "enter a new invoice with enter_supplier_invoice",
+    ("Payment Entry", Op.CREATE): "pay approved invoices with pay_supplier",
+    ("Payment Entry", Op.SUBMIT): "a payment is submitted by approving it with "
+                                  "workflow_action",
+    ("Payment Entry", Op.AMEND): "enter a new payment with pay_supplier",
+    ("Material Request", Op.CREATE): "raise purchase requests with raise_purchase_request",
+    ("Material Request", Op.SUBMIT): "a request is submitted by approving it with "
+                                     "workflow_action",
+    ("Request for Quotation", Op.CREATE): "ask for quotes with request_quotes",
+    ("Supplier Quotation", Op.CREATE): "enter quotes with enter_supplier_quote",
+    ("Supplier", Op.CREATE): "onboard suppliers with onboard_supplier, which runs the "
+                             "duplicate-supplier checks",
+    (masters.CHANGE_REQUEST, Op.CREATE): "change requests are made by update_document on "
+                                         "the record to change",
+    (masters.CHANGE_REQUEST, Op.UPDATE): "a change request isn't edited; reject it with "
+                                         "workflow_action and ask again with update_document",
+    (masters.CHANGE_REQUEST, Op.SUBMIT): "approve or reject it with workflow_action",
+    (masters.CHANGE_REQUEST, Op.CANCEL): "reject it with workflow_action",
+    (masters.CHANGE_REQUEST, Op.AMEND): "ask again with update_document on the record",
+    **{(dt, op): "master data is changed with update_document, not submitted, cancelled "
+                 "or amended"
+       for dt in masters.MASTERS for op in (Op.SUBMIT, Op.WORKFLOW, Op.CANCEL, Op.AMEND)},
+}
+
+
+def _refuse(message: str) -> CheckResult:
+    return CheckResult("pack", BLOCK, message, {"pack": "purchase-to-pay"})
+
+
+class P2PPack:
+    name = "purchase-to-pay"
+    # The pack's task tools, by the document type they work on; describe_doctype points the
+    # model at these first.
+    task_tools: dict[str, tuple[str, ...]] = {
+        "Purchase Order": ("create_purchase_order", "submit_for_approval",
+                           "approve_purchase_order", "reject_purchase_order",
+                           "cancel_purchase_order", "amend_purchase_order",
+                           "close_purchase_order"),
+        "Purchase Receipt": ("receive_goods", "return_goods"),
+        "Purchase Invoice": ("enter_supplier_invoice", "enter_debit_note", "hold_invoice",
+                             "release_invoice"),
+        "Payment Entry": ("pay_supplier",),
+        "Material Request": ("raise_purchase_request",),
+        "Request for Quotation": ("request_quotes",),
+        "Supplier Quotation": ("enter_supplier_quote",),
+        "Supplier": ("onboard_supplier",),
+    }
+    ownership_notes: dict[str, str] = {
+        dt: "Owned by the purchase-to-pay pack only when linked to a Supplier; otherwise the "
+            "generic checks apply." for dt in masters.SUPPLIER_LINKED}
+
+    def owns(self, doctype: str) -> bool:
+        return doctype in P2P_OWNED
+
+    def owns_write(self, svc: Service, w: Write) -> bool:
+        return masters.owns_write(svc, w)
+
+    def also_acts_on(self, svc: Service, doctype: str, name: str) -> list[tuple[str, str]]:
+        """Deciding a change request also saves the record it changes."""
+        return masters.also_acts_on(svc, doctype, name)
+
+    def _route(self, svc: Service, w: Write) -> tuple[str, dict] | CheckResult:
+        """The pack action and its canonical arguments for this write, or why not."""
+        if (w.doctype, w.op) == ("Purchase Order", Op.CREATE):
+            return self._route_po_create(svc, w)
+        if (w.doctype, w.op) == ("Purchase Order", Op.WORKFLOW):
+            return self._route_po_workflow(svc, w)
+        if (instead := _INSTEAD.get((w.doctype, w.op))):
+            return _refuse(f"{w.op.value} on {w.doctype} is not supported by the "
+                           f"purchase-to-pay pack: {instead}.")
+        return _refuse(f"{w.op.value} on {w.doctype} is not supported by the "
+                       "purchase-to-pay pack yet.")
+
+    @staticmethod
+    def _canon(svc: Service, name: str, args: dict) -> tuple[str, dict] | CheckResult:
+        from erp_guard.service import InvalidArgs
+        action = svc.actions[name]
+        try:
+            return action.name, action.canonicalise(args)
+        except InvalidArgs as exc:
+            return _refuse(f"Purchase Order: {exc}.")
+
+    def _route_po_workflow(self, svc: Service, w: Write) -> tuple[str, dict] | CheckResult:
+        """A Purchase Order workflow action is the v1 tool for the same step, with the same
+        checks. Revise and Withdraw only happen as part of an amendment."""
+        if w.action in (REVISE, WITHDRAW):
+            return _refuse(f"{w.action} on a Purchase Order happens as part of an amendment: "
+                           "use amend_purchase_order with the new lines.")
+        target = _PO_WORKFLOW.get(w.action or "")
+        if target is None:
+            return _refuse(f"'{w.action}' is not a Purchase Order workflow action. Use one "
+                           f"of: {', '.join([*_PO_WORKFLOW, REVISE, WITHDRAW])}.")
+        name, comment_as = target
+        args = {"po": w.name}
+        if w.reason:
+            if comment_as is None:
+                return _refuse(f"'{w.action}' on a Purchase Order takes no comment.")
+            args[comment_as] = w.reason
+        return self._canon(svc, name, args)
+
+    def _route_po_create(self, svc: Service, w: Write) -> tuple[str, dict] | CheckResult:
+        fields = {k: v for k, v in w.fields.items()
+                  if not (k == "doctype" and v == "Purchase Order")}
+        unsupported = sorted(set(fields) - set(_PO_HEADER))
+        rows = fields.get("items")
+        if isinstance(rows, list):
+            unsupported += sorted({f"items[].{k}" for r in rows if isinstance(r, dict)
+                                   for k in r if k not in _PO_ROW and k != "doctype"})
+        if unsupported:
+            return _refuse(
+                f"Purchase Order field(s) {', '.join(unsupported)} are not supported through "
+                "create_document. It takes supplier, erp_guard_cost_centre, erp_guard_notes and "
+                "items (item_code, qty, rate, description); or use create_purchase_order.")
+        args = {_PO_HEADER[k]: v for k, v in fields.items()}
+        if isinstance(rows, list):
+            args["lines"] = [{k: v for k, v in r.items() if k != "doctype"}
+                             if isinstance(r, dict) else r for r in rows]
+        return self._canon(svc, "create_purchase_order", args)
+
+    def evaluate_write(self, svc: Service, w: Write) -> tuple[str, list[CheckResult]]:
+        if (direct := _DIRECT.get((w.doctype, w.op))):
+            return direct[0](svc, w)
+        route = self._route(svc, w)
+        if isinstance(route, CheckResult):
+            return f"{w.op.value.capitalize()} {w.doctype} {w.name or ''}".rstrip() + ".", \
+                [route]
+        name, canon = route
+        return svc.actions[name].evaluate(svc, canon)
+
+    def apply_write(self, svc: Service, w: Write) -> tuple[str, str]:
+        if (direct := _DIRECT.get((w.doctype, w.op))):
+            return direct[1](svc, w)
+        route = self._route(svc, w)
+        if isinstance(route, CheckResult):  # evaluate blocks first; never reached
+            raise ErpError(route.message)
+        name, canon = route
+        return svc.actions[name].write(svc, canon)

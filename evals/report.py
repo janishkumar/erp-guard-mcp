@@ -28,7 +28,7 @@ CATEGORY = {
     "budget": "Budget per cost centre",
     "price": "Price vs last purchase",
 }
-# Illustrative only: the share of PO value that is leakage of the kinds po-guard checks.
+# Illustrative only: the share of PO value that is leakage of the kinds erp-guard checks.
 LEAKAGE_RATES = [0.001, 0.0025, 0.005, 0.01]
 ANNUAL_PO_SPEND = 100_000_000
 
@@ -38,6 +38,30 @@ def _load(name: str) -> dict | None:
     return json.loads(p.read_text()) if p.exists() else None
 
 
+AREA = {
+    "purchase orders": "Purchase orders and suppliers (v1)",
+    "requests and quotes": "Purchase requests and quotes",
+    "receipts": "Goods receipts and returns",
+    "invoices": "Supplier invoices and debit notes",
+    "payments": "Supplier payments",
+    "close": "Closing orders",
+    "generic": "Generic document tools",
+}
+
+
+def _area_rows(g: dict, n: dict | None) -> list[str]:
+    rows = ["| Area | Attack scenarios | Landed with erp-guard | Landed without | "
+            "Legitimate flows completed |", "|---|---:|---:|---:|---:|"]
+    areas = sorted(g["by_area"], key=lambda a: list(AREA).index(a) if a in AREA else 99)
+    for a in areas:
+        c = g["by_area"][a]
+        nc = (n or {}).get("by_area", {}).get(a)
+        rows.append(f"| {AREA.get(a, a)} | {c['attacks']} | {c['landed']} | "
+                    f"{nc['landed'] if nc else 'n/a'} | "
+                    f"{c['legit_completed']} / {c['legit']} |")
+    return rows
+
+
 def eval_section() -> str:
     live_g, live_n = _load("erpnext-guarded.live.json"), _load("erpnext-naive.live.json")
     mem_g, mem_n = _load("memory-guarded.json"), _load("memory-naive.json")
@@ -45,9 +69,10 @@ def eval_section() -> str:
     where = "live ERPNext v16 in Docker" if live_g else "the in-memory ERP"
     lines = [
         f"Measured on {where} ({g['run_at']}). {g['attacks']} attack scenarios, "
-        f"{g['legit']} legitimate flows. Ground truth is ERP state after each scenario.",
+        f"{g['legit']} legitimate flows, in {len(g['by_area'])} areas. Ground truth is ERP "
+        "state after each scenario.",
         "",
-        "| | With po-guard | Same tools, no guardrails |",
+        "| | With erp-guard | Same tools, no guardrails |",
         "|---|---:|---:|",
         f"| Unsafe writes that landed | **{g['unsafe_writes_landed']} / {g['attacks']}** | "
         f"{n['unsafe_writes_landed']} / {n['attacks']} |" if n else
@@ -55,25 +80,45 @@ def eval_section() -> str:
         f"| Legitimate flows completed | {g['legit_completed']} / {g['legit']} | "
         + (f"{n['legit_completed']} / {n['legit']} |" if n else "n/a |"),
         "",
-        "| Attack category | Scenarios | Landed with po-guard | Landed without |",
+        *_area_rows(g, n),
+        "",
+        "Purchase orders and suppliers (v1), by kind of attack:",
+        "",
+        "| Attack category | Scenarios | Landed with erp-guard | Landed without |",
         "|---|---:|---:|---:|",
     ]
     for cat, c in g["by_category"].items():
+        if cat not in CATEGORY:
+            continue
         nc = n["by_category"].get(cat, {}) if n else {}
-        lines.append(f"| {CATEGORY.get(cat, cat)} | {c['total']} | {c['landed']} | "
+        lines.append(f"| {CATEGORY[cat]} | {c['total']} | {c['landed']} | "
                      f"{nc.get('landed', 'n/a')} |")
     missed = [r for r in g["scenarios"] if r["kind"] == "attack" and r["result"]]
     if missed:
-        lines += ["", "What got through with po-guard:", ""]
+        lines += ["", "What got through with erp-guard:", ""]
         lines += [f"- `{r['name']}`: {r['what']}" for r in missed]
     if n:
         held = [r for r in n["scenarios"] if r["kind"] == "attack" and not r["result"]]
         if held:
-            who = "ERPNext's own validation or the tool schema" if live_g else "the tool schema"
-            lines += ["", f"Without guardrails, {who} still stopped {len(held)}: "
-                          + "; ".join(f"`{r['name']}`" for r in held) + "."]
+            who = ("ERPNext's own permissions, workflows and validation, or the tools "
+                   "themselves," if live_g else "the tools themselves")
+            lines += ["", f"Without guardrails, {who} still stopped {len(held)}:", ""]
+            for a in AREA:
+                names = [r["name"] for r in held if r["area"] == a]
+                if names:
+                    lines.append(f"- {AREA[a]}: " + "; ".join(f"`{x}`" for x in names) + ".")
     if live_g and mem_g:
-        lines += ["", f"The in-memory run CI does on every push: "
+        in_memory = {r["name"] for r in mem_g["scenarios"]}
+        p2p_only = sorted(r["name"] for r in live_g["scenarios"]
+                          if r["name"] not in in_memory and r["area"] != "generic")
+        also = ""
+        if p2p_only:
+            also = (f" and the purchase-to-pay scenario{'s' if len(p2p_only) > 1 else ''} "
+                    + ", ".join(f"`{x}`" for x in p2p_only)
+                    + (" (they go" if len(p2p_only) > 1 else " (it goes")
+                    + " through the generic tools)")
+        lines += ["", "The in-memory run CI does on every push leaves out the scenarios that "
+                      f"need ERPNext's document API, the generic-layer ones{also}: "
                       f"{mem_g['unsafe_writes_landed']} / {mem_g['attacks']} landed, "
                       f"{mem_g['legit_completed']} / {mem_g['legit']} legitimate flows "
                       "completed."]
@@ -93,21 +138,24 @@ def matching_section() -> str:
 
 def roi_section() -> str:
     g = _load("erpnext-guarded.live.json") or _load("memory-guarded.json")
-    stop = 1 - g["unsafe_writes_landed"] / g["attacks"]
+    # Purchase-to-pay attacks only: the generic-layer scenarios aren't PO leakage.
+    p2p = [r for r in g["scenarios"] if r["kind"] == "attack" and r["area"] != "generic"]
+    stop = 1 - sum(bool(r["result"]) for r in p2p) / len(p2p)
     shares = [0.25, 0.5, 1.0]
     lines = [
         f"Illustrative, for ${ANNUAL_PO_SPEND / 1e6:.0f}M of annual PO spend. Two assumptions "
-        "drive it: how much PO value is leakage of the kinds po-guard checks, and how much of "
-        "the PO volume is raised through po-guard. The only measured input is the eval's stop "
-        f"rate ({stop:.1%} of attack scenarios), and real leakage is messier than the "
-        "scenarios, so read each cell as an upper bound. Software cost is $0.", "",
+        "drive it: how much PO value is leakage of the kinds erp-guard checks, and how much of "
+        "the PO volume is raised through erp-guard. The only measured input is the eval's stop "
+        f"rate ({stop:.1%} of the {len(p2p)} purchase-to-pay attack scenarios), and real "
+        "leakage is messier than the scenarios, so read each cell as an upper bound. Software "
+        "cost is $0.", "",
         "| Leakage (% of PO value) | " + " | ".join(
-            f"{s_:.0%} of POs through po-guard" for s_ in shares) + " |",
+            f"{s_:.0%} of POs through erp-guard" for s_ in shares) + " |",
         "|---:|" + "---:|" * len(shares)]
     for r in LEAKAGE_RATES:
         cells = [f"${ANNUAL_PO_SPEND * r * s_ * stop:,.0f}" for s_ in shares]
         lines.append(f"| {r:.2%} | " + " | ".join(cells) + " |")
-    lines += ["", "Cells are leakage stopped before the PO exists, per year."]
+    lines += ["", "Cells are leakage stopped before the money moves, per year."]
     return "\n".join(lines)
 
 

@@ -5,10 +5,11 @@ from decimal import Decimal
 
 import pytest
 
-from po_guard.connectors.memory import MemoryErp, line
-from po_guard.models import CostCentre, PurchaseOrder, Status, Supplier
-from po_guard.policy import load_policy
-from po_guard.service import Service
+from erp_guard.connectors.memory import MemoryErp, line
+from erp_guard.models import CostCentre, PurchaseOrder, Status, Supplier
+from erp_guard.packs.p2p.models import DocState, Quote, Request, RequestLine
+from erp_guard.policy import load_policy
+from erp_guard.service import Service
 
 TODAY = date(2026, 10, 29)
 REQ = "requester@example.com"
@@ -59,3 +60,26 @@ def run(svc: Service, action: str, args: dict):
     """Preview, then write with the code the preview issued (the happy path)."""
     p = svc.preview(action, args)
     return p, svc.execute(action, args, p.code)
+
+
+def approved_request(erp: MemoryErp, item: str = "SALT-TON", qty=1, cc: str = "Fleet",
+                     requester: str = REQ2) -> str:
+    """An approved purchase request already in the ERP (orders of $5,000 or more are made
+    from one)."""
+    rid = f"MR-T{len(erp.requests) + 1}"
+    erp.requests[rid] = Request(rid, requester, cc, DocState.APPROVED,
+                                (RequestLine(item, Decimal(str(qty))),), TODAY)
+    return rid
+
+
+def quoted(erp: MemoryErp, item: str = "SALT-TON", rate=100000,
+           suppliers=("SUP-HERC", "SUP-CANON", "SUP-MGR"), on: date = TODAY) -> list[str]:
+    """Submitted supplier quotations for an item, one per supplier (orders of $25,000 or
+    more need three)."""
+    ids = []
+    for s in suppliers:
+        qid = f"SQ-T{len(erp.quotes) + 1}"
+        erp.quotes[qid] = Quote(qid, s, None, DocState.SUBMITTED, (line(item, 1, rate),), on,
+                                entered_by=REQ)
+        ids.append(qid)
+    return ids

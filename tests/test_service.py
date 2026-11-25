@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
-from conftest import DIR, MGR, REQ, REQ2, as_user, po_args, run
+from conftest import DIR, MGR, REQ, REQ2, approved_request, as_user, po_args, quoted, run
 
-from po_guard.models import Status
-from po_guard.service import CodeBook, InvalidArgs, canonical_args
+from erp_guard.models import Status
+from erp_guard.service import CodeBook, InvalidArgs, canonical_args
 
 
 def levels(results):
@@ -14,7 +14,8 @@ def levels(results):
 
 
 def test_happy_path_create_submit_approve(erp, svc, policy):
-    p, out = run(svc, "create_purchase_order", po_args(qty=10, rate=1000))
+    rid = approved_request(erp, qty=10)  # $5,000 or more is made from a purchase request
+    p, out = run(svc, "create_purchase_order", po_args(qty=10, rate=1000, request=rid))
     assert not p.blocked and p.code
     assert out.outcome == "written", out.message
     po = out.target
@@ -84,26 +85,40 @@ def test_blocked_preview_issues_no_code(svc):
     assert p.blocked and p.code is None
 
 
+def _requested(erp, qty: int) -> str:
+    """An approved request for `qty` tons of salt, and three suppliers' quotes (orders of
+    $25,000 or more need them), so the v1 rules are what these tests meet."""
+    quoted(erp)
+    return approved_request(erp, qty=qty)
+
+
 def test_split_purchase_96k_as_two_48k(erp, svc, policy):
-    _, first = run(svc, "create_purchase_order", po_args(qty=1, rate=48000))
+    rid = _requested(erp, 2)
+    _, first = run(svc, "create_purchase_order", po_args(qty=1, rate=48000, request=rid))
     assert first.outcome == "written"
-    p = svc.preview("create_purchase_order", po_args(qty=1, rate=48000))
+    p = svc.preview("create_purchase_order", po_args(qty=1, rate=48000, request=rid))
     assert levels(p.checks)["split_purchase"] == "block" and p.code is None
     assert len(erp.list_orders(supplier_id="SUP-HERC")) == 1
 
 
 def test_split_by_another_requester_is_caught(erp, svc, policy):
-    run(svc, "create_purchase_order", po_args(qty=1, rate=30000))
-    p = as_user(erp, policy, REQ2).preview("create_purchase_order", po_args(qty=1, rate=30000))
+    rid = _requested(erp, 2)
+    assert run(svc, "create_purchase_order",
+               po_args(qty=1, rate=30000, request=rid))[1].outcome == "written"
+    p = as_user(erp, policy, REQ2).preview("create_purchase_order",
+                                           po_args(qty=1, rate=30000, request=rid))
     assert levels(p.checks)["split_purchase"] == "block"
 
 
 def test_checks_rerun_at_write_time(erp, svc, policy):
     """A clean preview doesn't protect a write once the world has changed."""
-    p = svc.preview("create_purchase_order", po_args(qty=1, rate=40000))
+    rid = _requested(erp, 2)
+    args = po_args(qty=1, rate=40000, request=rid)
+    p = svc.preview("create_purchase_order", args)
     assert p.code
-    run(as_user(erp, policy, REQ2), "create_purchase_order", po_args(qty=1, rate=40000))
-    out = svc.execute("create_purchase_order", po_args(qty=1, rate=40000), p.code)
+    assert run(as_user(erp, policy, REQ2), "create_purchase_order", args)[1].outcome == \
+        "written"
+    out = svc.execute("create_purchase_order", args, p.code)
     assert out.outcome == "blocked" and "split" in out.message.lower()
     assert len(erp.list_orders(supplier_id="SUP-HERC")) == 1
 
@@ -141,7 +156,8 @@ def test_approver_cannot_approve_own_order(erp, policy):
 
 
 def test_approval_above_limit(erp, svc, policy):
-    _, out = run(svc, "create_purchase_order", po_args(qty=1, rate=80000))
+    rid = _requested(erp, 1)
+    _, out = run(svc, "create_purchase_order", po_args(qty=1, rate=80000, request=rid))
     run(svc, "submit_for_approval", {"po": out.target})
     p = as_user(erp, policy, MGR).preview("approve_purchase_order", {"po": out.target})
     assert levels(p.checks)["approval_authority"] == "block"
@@ -224,10 +240,11 @@ def test_amend_rechecks_and_resets_to_draft(erp, svc):
 
 
 def test_amend_cannot_dodge_the_split_check(erp, svc):
-    _, a = run(svc, "create_purchase_order", po_args(qty=1, rate=40000))
-    _, b = run(svc, "create_purchase_order", po_args(qty=1, rate=5000))
+    rid = _requested(erp, 2)
+    _, a = run(svc, "create_purchase_order", po_args(qty=1, rate=40000, request=rid))
+    _, b = run(svc, "create_purchase_order", po_args(qty=1, rate=5000, request=rid))
     assert a.outcome == b.outcome == "written"
-    p = svc.preview("amend_purchase_order", {"po": b.target, "lines": [
+    p = svc.preview("amend_purchase_order", {"po": b.target, "request": rid, "lines": [
         {"item_code": "SALT-TON", "qty": 1, "rate": 40000}]})
     assert levels(p.checks)["split_purchase"] == "block"
 
@@ -253,3 +270,49 @@ def test_unknown_item_and_supplier(svc):
 def test_invalid_args_on_execute_are_refused_and_audited(erp, svc):
     out = svc.execute("create_purchase_order", {"supplier": "SUP-HERC"}, "ABCDEFGH")
     assert out.outcome == "refused" and erp.audit[-1].outcome == "refused"
+
+
+# --- codes bind the target document's version ------------------------------------------
+
+def test_code_is_refused_when_the_document_changed_after_preview(erp, svc, policy):
+    """A manager's code for a $900 order can't approve it after the requester withdrew,
+    amended it to $4,750 and resubmitted: the code is bound to the document as previewed."""
+    _, out = run(svc, "create_purchase_order", po_args(qty=10, rate=90, item="TONER-K",
+                                                       supplier="SUP-CANON", cc="IT"))
+    po = out.target
+    run(svc, "submit_for_approval", {"po": po})
+    mgr = as_user(erp, policy, MGR)
+    early = mgr.preview("approve_purchase_order", {"po": po})
+    assert early.code
+    amend = {"po": po, "lines": [{"item_code": "TONER-K", "qty": 50, "rate": 95}]}
+    assert run(svc, "amend_purchase_order", amend)[1].outcome == "written"
+    assert run(svc, "submit_for_approval", {"po": po})[1].outcome == "written"
+    late = mgr.execute("approve_purchase_order", {"po": po}, early.code)
+    assert late.outcome == "refused" and "changed after the preview" in late.message
+    assert erp.get_order(po).status == Status.PENDING and erp.get_order(po).approver is None
+    assert (erp.audit[-1].outcome, erp.audit[-1].target) == ("refused", po)
+    # The code is burned; a fresh preview of the new version works.
+    assert mgr.execute("approve_purchase_order", {"po": po}, early.code).outcome == "refused"
+    assert run(mgr, "approve_purchase_order", {"po": po})[1].outcome == "written"
+
+
+def test_unchanged_document_keeps_its_code(erp, svc, policy):
+    _, out = run(svc, "create_purchase_order", po_args())
+    p = svc.preview("submit_for_approval", {"po": out.target})
+    run(svc, "create_purchase_order", po_args(supplier="SUP-CANON"))  # another document
+    assert svc.execute("submit_for_approval", {"po": out.target}, p.code).outcome == "written"
+
+
+def test_an_erp_error_in_the_write_time_recheck_is_audited(erp, svc):
+    from erp_guard.connectors.base import ErpError
+    _, out = run(svc, "create_purchase_order", po_args())
+    p = svc.preview("submit_for_approval", {"po": out.target})
+    n = len(erp.audit)
+
+    def fail(*a, **k):
+        raise ErpError("403 on read")
+    erp.get_order = fail
+    res = svc.execute("submit_for_approval", {"po": out.target}, p.code)
+    assert res.outcome == "error" and "403 on read" in res.message
+    assert len(erp.audit) == n + 1 and erp.audit[-1].outcome == "error"
+    assert erp.audit[-1].target == out.target

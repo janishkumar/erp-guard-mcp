@@ -1,0 +1,3308 @@
+{
+ "message": [
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Website",
+   "name": "About Us Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Access Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Account"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Account Category"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Account Closing Balance"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Accounting Dimension"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Accounting Dimension Filter"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Accounting Period"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Accounts Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Activity Cost"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Activity Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Activity Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Contacts",
+   "name": "Address"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Contacts",
+   "name": "Address Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Advance Payment Ledger Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "API Request Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Appointment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Appointment Booking Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Activity"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Capitalization"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Category"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Depreciation Schedule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Maintenance"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Maintenance Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Maintenance Team"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Movement"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Repair"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Shift Allocation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Shift Factor"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Asset Value Adjustment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Assignment Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Audit Trail"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Authorization Control"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Authorization Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Auto Email Report"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Auto Repeat"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Automation Event Subscription"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Automation Flow"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Automation Run"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Automation Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Automation Trigger Queue"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Account"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Account Balance"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Account Subtype"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Account Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Clearance"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Guarantee"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Reconciliation Tool"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Statement Import"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Statement Import Log"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Transaction"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bank Transaction Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Batch"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Bin"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bisect Accounting Statements"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Bisect Nodes"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Blanket Order"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "BOM"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "BOM Creator"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "BOM Update Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "BOM Update Tool"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Branch"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Brand"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Budget"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Bulk Transaction",
+   "name": "Bulk Transaction Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Bulk Transaction",
+   "name": "Bulk Transaction Log Detail"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Bulk Update"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Buying Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Calendar View"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Telephony",
+   "name": "Call Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Campaign"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Cashier Closing"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Chart of Accounts Importer"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Cheque Print Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Custom",
+   "name": "Client Script"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "EDI",
+   "name": "Code List"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Color"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Comment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "EDI",
+   "name": "Common Code"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Communication"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Communication",
+   "name": "Communication Medium"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Company"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Competitor"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Connected App"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Console Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Contacts",
+   "name": "Contact"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Website",
+   "name": "Contact Us Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Contract"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Contract Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Cost Center"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Cost Center Allocation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Geo",
+   "name": "Country"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Coupon Code"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "CRM",
+   "name": "CRM Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Geo",
+   "name": "Currency"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Currency Exchange"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Currency Exchange Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Custom DocPerm"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Custom",
+   "name": "Custom Field"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Custom HTML Block"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Custom Role"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Custom Sidebar"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Custom Workspace"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Customer"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Customer Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Custom",
+   "name": "Customize Form"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Customs Tariff Number"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Dashboard"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Dashboard Chart"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Dashboard Chart Source"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Dashboard Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Data Export"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Data Import"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Data Import Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Deleted Document"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Delivery Note"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Delivery Schedule Item"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Delivery Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Delivery Trip"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Department"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Designation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Desktop Icon"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Desktop Layout"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Desktop Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Discussion Reply"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Discussion Topic"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Dock"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "DocShare"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "DocType"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Custom",
+   "name": "DocType Layout"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "DocType Settings Map"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Document Follow"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Document Naming Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Document Naming Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Document Share Key"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Domain"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Domain Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Downtime Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Driver"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "DuckDB Sync"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Dunning"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Dunning Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Account"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Email Campaign"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Email Digest"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Domain"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Flag Queue"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Group Member"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Queue"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Email Unsubscribe"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Employee"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Employee Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "ERP Guard Audit"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "ERP Guard Change Request"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Error Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Event"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Exchange Rate Revaluation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "File"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Finance Book"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Financial Report Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Fiscal Year"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Form Tour"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Contacts",
+   "name": "Gender"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Geolocation Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "GL Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Global Defaults"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Global Search Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Google Calendar"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Google Contacts"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Google Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Help Article"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Help Category"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Holiday List"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Regional",
+   "name": "Import Supplier Invoice"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Telephony",
+   "name": "Incoming Call Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Incoterm"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Industry Type"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Installation Note"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Installed Applications"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Integration Request"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Inventory Dimension"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Invoice Discounting"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Support",
+   "name": "Issue"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Support",
+   "name": "Issue Priority"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Support",
+   "name": "Issue Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item Alternative"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item Attribute"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Item Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item Lead Time"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item Manufacturer"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item Price"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Item Tax Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Item Variant Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Job Card"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Journal Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Journal Entry Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Kanban Board"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Landed Cost Voucher"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Language"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "LDAP Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Lead"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Ledger Health"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Ledger Health Monitor"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Ledger Merge"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Letter Head"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "List Filter"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "List View Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Assets",
+   "name": "Location"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Log Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Regional",
+   "name": "Lower Deduction Certificate"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Loyalty Point Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Loyalty Program"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Maintenance",
+   "name": "Maintenance Schedule"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Maintenance",
+   "name": "Maintenance Visit"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Manufacturer"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Manufacturing Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Market Segment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Master Production Schedule"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Material Request"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Milestone"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Milestone Tracker"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Mode of Payment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Module Def"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Module Onboarding"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Module Profile"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Monthly Distribution"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Navbar Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Network Printer Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Non Conformance"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Note"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Notification"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Notification Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Notification Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Notification Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Number Card"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "OAuth Authorization Code"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "OAuth Bearer Token"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "OAuth Client"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "OAuth Provider Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "OAuth Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Onboarding Step"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Opening Invoice Creation Tool"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Operation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Opportunity"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Opportunity Lost Reason"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Opportunity Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Package"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Package Import"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Package Release"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Packing Slip"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Page"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Party Link"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Party Specific Item"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Party Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Patch Log"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Gateway Account"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Ledger Entry"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Order"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Reconciliation"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Request"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Term"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Payment Terms Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Pegged Currencies"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Period Closing Voucher"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Permission Inspector"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Permission Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Permission Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Personal Data Deletion Request"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Personal Data Download Request"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Pick List"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "ERPNext Integrations",
+   "name": "Plaid Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Plant Floor"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Website",
+   "name": "Portal Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "POS Closing Entry"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "POS Invoice"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "POS Invoice Merge Log"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "POS Opening Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "POS Profile"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "POS Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Prepared Report"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Price List"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Pricing Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Print Format"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Print Format Field Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Print Format Snippet"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Print Heading"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Print Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Printing",
+   "name": "Print Style"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Process Deferred Accounting"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Process Payment Reconciliation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Process Payment Reconciliation Log"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Process Period Closing Voucher"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Process Statement Of Accounts"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Process Subscription"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Product Bundle"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Production Plan"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Project"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Project Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Project Type"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Project Update"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Projects Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Promotional Scheme"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Custom",
+   "name": "Property Setter"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Prospect"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Purchase Invoice"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Purchase Order"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Purchase Receipt"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Purchase Taxes and Charges Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Push Notification Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Putaway Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Action"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Feedback"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Feedback Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Goal"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Quality Inspection"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Quality Inspection Parameter"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Quality Inspection Parameter Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Quality Inspection Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Meeting"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Procedure"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Quality Management",
+   "name": "Quality Review"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Quick Stock Balance"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Quotation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Quotation Lost Reason"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Recorder"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Automation",
+   "name": "Reminder"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Utilities",
+   "name": "Rename Tool"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Report"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Repost Accounting Ledger"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Repost Item Valuation"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Repost Payment Ledger"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Request for Quotation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Role"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Role Permission for Page and Report"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Role Profile"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Route History"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Routing"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "RQ Job"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "RQ Worker"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Sales Forecast"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Sales Invoice"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Sales Order"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Sales Partner"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Sales Partner Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Sales Person"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "CRM",
+   "name": "Sales Stage"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Sales Taxes and Charges Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Contacts",
+   "name": "Salutation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Scheduled Job Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Scheduled Job Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Scheduler Event"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Security Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Selling",
+   "name": "Selling Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Serial and Batch Bundle"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Serial No"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Server Script"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Support",
+   "name": "Service Level Agreement"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "Session Default Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Share Transfer"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Share Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Shareholder"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Shipment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Shipment Parcel Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Shipping Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Sidebar"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Sidebar Item Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Slack Webhook URL"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Selling",
+   "name": "SMS Center"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "SMS Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "SMS Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Social Login Key"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Regional",
+   "name": "South Africa VAT Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Closing Balance"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Closing Entry"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Entry Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Ledger Entry"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Reconciliation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Reposting Settings"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Reservation Entry"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Stock Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Subcontracting",
+   "name": "Subcontracting BOM"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Subcontracting",
+   "name": "Subcontracting Inward Order"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Subcontracting",
+   "name": "Subcontracting Order"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Subcontracting",
+   "name": "Subcontracting Receipt"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Submission Queue"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Subscription"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Subscription Plan"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Subscription Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Success Action"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Supplier Group"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier Quotation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier Scorecard"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier Scorecard Criteria"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier Scorecard Period"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier Scorecard Standing"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Buying",
+   "name": "Supplier Scorecard Variable"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Support",
+   "name": "Support Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Desk",
+   "name": "System Console"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Desk",
+   "name": "System Health Report"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Core",
+   "name": "System Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Tag"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Tag Link"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Task"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Task Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Tax Category"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Tax Rule"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Tax Withholding Category"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Tax Withholding Group"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Telephony",
+   "name": "Telephony Call Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Terms and Conditions"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Territory"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Projects",
+   "name": "Timesheet"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "ToDo"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Token Cache"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Transaction Deletion Record"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Translation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Regional",
+   "name": "UAE VAT Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Email",
+   "name": "Unhandled Email"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Accounts",
+   "name": "Unreconcile Payment"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "UOM"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "UOM Category"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "UOM Conversion Factor"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "User"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "User Group"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "User Invitation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "User Permission"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "User Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "UTM Campaign"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "UTM Medium"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "UTM Source"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Setup",
+   "name": "Vehicle"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "Version"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Utilities",
+   "name": "Video"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Utilities",
+   "name": "Video Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Core",
+   "name": "View Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Telephony",
+   "name": "Voice Call Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Warehouse"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Stock",
+   "name": "Warehouse Type"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Support",
+   "name": "Warranty Claim"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Web Form"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Web Form Request"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Web Page"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Web Page View"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Web Template"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Webhook"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Integrations",
+   "name": "Webhook Request Log"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Website Route Meta"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Website",
+   "name": "Website Script"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 1,
+   "istable": 0,
+   "module": "Website",
+   "name": "Website Settings"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Website Sidebar"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Website Slideshow"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Website",
+   "name": "Website Theme"
+  },
+  {
+   "is_submittable": 1,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Work Order"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Workflow",
+   "name": "Workflow"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Workflow",
+   "name": "Workflow Action"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Workflow",
+   "name": "Workflow Action Master"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Workflow",
+   "name": "Workflow State"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Workflow",
+   "name": "Workflow Transition Tasks"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Workspace"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Desk",
+   "name": "Workspace Sidebar"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Workstation"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Workstation Operating Component"
+  },
+  {
+   "is_submittable": 0,
+   "issingle": 0,
+   "istable": 0,
+   "module": "Manufacturing",
+   "name": "Workstation Type"
+  }
+ ]
+}

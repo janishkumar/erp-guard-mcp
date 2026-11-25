@@ -1,7 +1,7 @@
-"""Set up the local ERPNext for po-guard: company, custom fields, audit doctype, demo data.
+"""Set up the local ERPNext for erp-guard: company, custom fields, audit doctype, demo data.
 
 Runs as the local Administrator (password `admin`, set by docker/compose.yml; local
-development only) and deliberately bypasses po-guard: this is the ERP's starting state,
+development only) and deliberately bypasses erp-guard: this is the ERP's starting state,
 not something the MCP does. Idempotent: safe to re-run.
 
 What it loads:
@@ -9,9 +9,16 @@ What it loads:
 - Supplier master: the `master` rows of data/seed/suppliers.csv, real organisation names
   from the City of Chicago vendor-payments ledger. Tax IDs are synthetic (00- prefix).
 - Synthetic, and labelled so: cost centres and budgets, an item catalogue with
-  reference prices, and approved historical orders that set last purchase prices and
-  part-consume budgets.
+  reference prices (goods are stock items into one warehouse, services non-stock), a
+  company bank ledger account with its mode of payment, and history: approved orders that
+  set last purchase prices and part-consume budgets, some of them received, invoiced and
+  paid.
 - Users (local test accounts, @example.com) with API keys, written to .env.
+- Approval workflows (all active) for material requests, purchase orders, purchase
+  invoices, payments and erp-guard change requests. A re-run brings existing workflows up
+  to the definitions here.
+
+ERPNext's Buying, Stock and Accounts Settings are left at their defaults.
 """
 
 from __future__ import annotations
@@ -28,47 +35,98 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from po_guard.demo import ABBR, COMPANY, COST_CENTRES, ITEMS, seed_suppliers  # noqa: E402
+from erp_guard.demo import (  # noqa: E402
+    ABBR,
+    BANK_ACCOUNT,
+    COMPANY,
+    COST_CENTRES,
+    ITEMS,
+    MODE_OF_PAYMENT,
+    STOCK_ITEMS,
+    USERS,
+    WAREHOUSE,
+    seed_suppliers,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = os.environ.get("ERPNEXT_URL", "http://localhost:8080")
 SUPPLIER_GROUP = "Demo Suppliers"
 ITEM_GROUP = "Demo Purchases"
-AUDIT = "PO Guard Audit"
+AUDIT = "ERP Guard Audit"
+CHANGE_REQUEST = "ERP Guard Change Request"
+# Who submits change requests for approval, and who approves or rejects them (erp-guard
+# lets only purchase approvers decide).
+CR_SUBMITTERS = ("Purchase User", "Accounts User")
+CR_APPROVERS = ("Purchase Manager",)
+HISTORY_NOTE = "Seed history (synthetic)."
 TODAY = date.today()
 
-USERS = {
-    "requester@example.com": ("Riley", "Requester", ["Purchase User"]),
-    "requester2@example.com": ("Sam", "Second-Requester", ["Purchase User"]),
-    "manager@example.com": ("Morgan", "Manager", ["Purchase User", "Purchase Manager"]),
-    "director@example.com": ("Dana", "Director", ["Purchase User", "Purchase Manager"]),
+# Demo users' names; their roles and .env tags are in erp_guard.demo.USERS.
+NAMES = {
+    "requester@example.com": ("Riley", "Requester"),
+    "requester2@example.com": ("Sam", "Second-Requester"),
+    "manager@example.com": ("Morgan", "Manager"),
+    "director@example.com": ("Dana", "Director"),
+    "receiver@example.com": ("Robin", "Receiver"),
+    "ap@example.com": ("Alex", "Payables"),
+    "controller@example.com": ("Casey", "Controller"),
+    "treasury@example.com": ("Taylor", "Treasury"),
 }
-# Read access to cost centres and items; supplier creation (onboarding is a po-guard tool).
-USER_ROLES_EXTRA = ["Accounts User", "Stock User", "Purchase Master Manager"]
+# Roles that do business through erp-guard, so must be able to write its audit trail.
+BUSINESS_ROLES = ["Purchase User", "Purchase Manager", "Stock User", "Accounts User",
+                  "Accounts Manager", "System Manager"]
 
 PO_FIELDS = [
-    {"fieldname": "po_guard_section", "fieldtype": "Section Break", "label": "po-guard",
+    {"fieldname": "erp_guard_section", "fieldtype": "Section Break", "label": "erp-guard",
      "insert_after": "items"},
-    {"fieldname": "po_guard_status", "fieldtype": "Select", "label": "po-guard status",
-     "options": "Draft\nPending Approval\nApproved\nRejected\nCancelled", "default": "Draft",
-     "allow_on_submit": 1, "in_list_view": 1, "insert_after": "po_guard_section"},
-    {"fieldname": "po_guard_cost_centre", "fieldtype": "Link", "options": "Cost Center",
-     "label": "Cost centre (po-guard)", "insert_after": "po_guard_status"},
-    {"fieldname": "po_guard_approver", "fieldtype": "Data", "label": "Approved by",
-     "allow_on_submit": 1, "read_only": 1, "insert_after": "po_guard_cost_centre"},
-    {"fieldname": "po_guard_reason", "fieldtype": "Small Text", "label": "Reject/cancel reason",
-     "allow_on_submit": 1, "insert_after": "po_guard_approver"},
-    {"fieldname": "po_guard_notes", "fieldtype": "Small Text", "label": "Notes",
-     "insert_after": "po_guard_reason"},
+    {"fieldname": "erp_guard_cost_centre", "fieldtype": "Link", "options": "Cost Center",
+     "label": "Cost centre (erp-guard)", "insert_after": "erp_guard_section"},
+    {"fieldname": "erp_guard_approver", "fieldtype": "Data", "label": "Approved by",
+     "allow_on_submit": 1, "read_only": 1, "insert_after": "erp_guard_cost_centre"},
+    {"fieldname": "erp_guard_reason", "fieldtype": "Small Text", "label": "Reject/cancel reason",
+     "allow_on_submit": 1, "insert_after": "erp_guard_approver"},
+    {"fieldname": "erp_guard_notes", "fieldtype": "Small Text", "label": "Notes",
+     "insert_after": "erp_guard_reason"},
+    # A draft order cancelled through erp-guard: drafts can't be cancelled in ERPNext, and
+    # erp-guard never deletes, so the draft stays with this flag (no workflow action is
+    # offered on it any more).
+    {"fieldname": "erp_guard_cancelled", "fieldtype": "Check", "label": "Cancelled (draft)",
+     "default": "0", "read_only": 1, "in_list_view": 1, "insert_after": "erp_guard_notes"},
+    # Why an order of $25,000 or more has no competing quotes; a director or above approves
+    # it then.
+    {"fieldname": "erp_guard_sole_source_reason", "fieldtype": "Small Text",
+     "label": "Sole-source reason", "insert_after": "erp_guard_cancelled"},
 ]
 SUPPLIER_FIELDS = [
-    {"fieldname": "po_guard_onboarded_by", "fieldtype": "Data", "label": "Onboarded by",
+    {"fieldname": "erp_guard_onboarded_by", "fieldtype": "Data", "label": "Onboarded by",
      "read_only": 1, "insert_after": "supplier_group"},
-    {"fieldname": "po_guard_notes", "fieldtype": "Small Text", "label": "Notes",
-     "insert_after": "po_guard_onboarded_by"},
+    {"fieldname": "erp_guard_notes", "fieldtype": "Small Text", "label": "Notes",
+     "insert_after": "erp_guard_onboarded_by"},
+]
+# Who approved an invoice or payment: set by the workflow when it enters Approved (ON_ENTER
+# below), as on the purchase order, so the approver is ERPNext's own record.
+APPROVER_FIELD = {"fieldname": "erp_guard_approver", "fieldtype": "Data", "label": "Approved by",
+                  "allow_on_submit": 1, "read_only": 1}
+# A draft or rejected invoice voided through erp-guard: as on the purchase order, it stays
+# a draft with this flag and the reason, and the workflow offers no transition on it.
+PI_FIELDS = [
+    {**APPROVER_FIELD, "insert_after": "bill_date"},
+    {"fieldname": "erp_guard_reason", "fieldtype": "Small Text", "label": "Cancel reason",
+     "allow_on_submit": 1, "insert_after": "erp_guard_approver"},
+    {"fieldname": "erp_guard_cancelled", "fieldtype": "Check", "label": "Cancelled (draft)",
+     "default": "0", "read_only": 1, "in_list_view": 1, "insert_after": "erp_guard_reason"},
+]
+# A draft or rejected payment voided through erp-guard, the same way: it stays a draft with
+# the flag and the reason, so it no longer blocks paying its invoices.
+PE_FIELDS = [
+    {**APPROVER_FIELD, "insert_after": "reference_date"},
+    {"fieldname": "erp_guard_reason", "fieldtype": "Small Text", "label": "Cancel reason",
+     "allow_on_submit": 1, "insert_after": "erp_guard_approver"},
+    {"fieldname": "erp_guard_cancelled", "fieldtype": "Check", "label": "Cancelled (draft)",
+     "default": "0", "read_only": 1, "in_list_view": 1, "insert_after": "erp_guard_reason"},
 ]
 CC_FIELDS = [
-    {"fieldname": "po_guard_annual_budget", "fieldtype": "Currency", "label": "Annual budget",
+    {"fieldname": "erp_guard_annual_budget", "fieldtype": "Currency", "label": "Annual budget",
      "insert_after": "cost_center_name"},
 ]
 
@@ -119,20 +177,36 @@ def setup_wizard(a: Admin) -> bool:
 
 def custom_fields(a: Admin) -> None:
     for dt, fields in (("Purchase Order", PO_FIELDS), ("Supplier", SUPPLIER_FIELDS),
-                       ("Cost Center", CC_FIELDS)):
+                       ("Cost Center", CC_FIELDS), ("Purchase Invoice", PI_FIELDS),
+                       ("Payment Entry", PE_FIELDS)):
         for f in fields:
             a.ensure({"doctype": "Custom Field", "dt": dt, **f}, f"{dt}-{f['fieldname']}")
 
 
-def audit_doctype(a: Admin) -> None:
-    if a.exists("DocType", AUDIT):
+def _perms(grants: dict[str, tuple[str, ...]]) -> list[dict]:
+    flags = ("read", "create", "write", "submit", "cancel", "amend", "delete")
+    return [{"role": role, **{f: int(f in given) for f in flags}, "report": 1, "export": 1}
+            for role, given in grants.items()]
+
+
+def _custom_doctype(a: Admin, doc: dict) -> None:
+    """Create an erp-guard DocType, or bring an existing one's permissions up to date."""
+    if not a.exists("DocType", doc["name"]):
+        a.insert({"doctype": "DocType", "module": "Buying", "custom": 1, **doc})
         return
-    perm = {"read": 1, "create": 1, "write": 0, "delete": 0, "report": 1, "export": 1}
-    a.insert({
-        "doctype": "DocType", "name": AUDIT, "module": "Buying", "custom": 1,
-        "autoname": "format:AUD-{#####}", "track_changes": 0, "sort_field": "creation",
-        "sort_order": "DESC", "title_field": "action",
-        "description": "Append-only trail of every po-guard write attempt.",
+    have = a.call("GET", f"/api/resource/DocType/{doc['name']}")["data"]["permissions"]
+    flags = ("role", "read", "create", "write", "submit", "cancel", "amend", "delete")
+    if ({tuple(p.get(f) for f in flags) for p in have}
+            != {tuple(p.get(f) for f in flags) for p in doc["permissions"]}):
+        a.call("PUT", f"/api/resource/DocType/{doc['name']}",
+               json={"permissions": doc["permissions"]})
+
+
+def audit_doctype(a: Admin) -> None:
+    _custom_doctype(a, {
+        "name": AUDIT, "autoname": "format:AUD-{#####}", "track_changes": 0,
+        "sort_field": "creation", "sort_order": "DESC", "title_field": "action",
+        "description": "Append-only trail of every erp-guard write attempt.",
         "fields": [
             {"fieldname": "action", "fieldtype": "Data", "label": "Action", "in_list_view": 1,
              "reqd": 1},
@@ -144,10 +218,50 @@ def audit_doctype(a: Admin) -> None:
             {"fieldname": "detail", "fieldtype": "Small Text", "label": "Detail"},
             {"fieldname": "checks", "fieldtype": "Long Text", "label": "Check results (JSON)"},
         ],
-        "permissions": [
-            {"role": "Purchase User", **perm}, {"role": "Purchase Manager", **perm},
-            {"role": "System Manager", **perm},
+        # Create and read only: the trail is append-only.
+        "permissions": _perms({r: ("read", "create") for r in BUSINESS_ROLES}),
+    })
+
+
+def change_request_doctype(a: Admin) -> None:
+    """A requested change to master data that a second person approves (workflow below).
+
+    Business roles create and read change requests and can't delete them. The workflow
+    needs a little more, because ERPNext saves a document as the user who applies a
+    transition and submits it on approval: the submitting roles (Purchase User, and Accounts
+    User for AP and treasury) also write, and the approving role (Purchase Manager) writes
+    and submits. A request for a new supplier address or contact has no target name until
+    it is approved, when the new document's name is recorded.
+    """
+    grants = {r: ("read", "create") for r in BUSINESS_ROLES}
+    for role in CR_SUBMITTERS:
+        grants[role] = ("read", "create", "write")
+    for role in CR_APPROVERS:
+        grants[role] = ("read", "create", "write", "submit")
+    _custom_doctype(a, {
+        "name": CHANGE_REQUEST, "autoname": "format:ECR-{#####}", "is_submittable": 1,
+        "track_changes": 1, "sort_field": "creation", "sort_order": "DESC",
+        "title_field": "target_name",
+        "description": "A change to master data that needs a second person (erp-guard).",
+        "fields": [
+            {"fieldname": "target_doctype", "fieldtype": "Link", "options": "DocType",
+             "label": "Document type", "reqd": 1, "in_list_view": 1},
+            {"fieldname": "target_name", "fieldtype": "Dynamic Link",
+             "options": "target_doctype", "label": "Document", "allow_on_submit": 1,
+             "in_list_view": 1},
+            {"fieldname": "fields_json", "fieldtype": "Long Text", "reqd": 1,
+             "label": "Requested field values (JSON)"},
+            {"fieldname": "requested_by", "fieldtype": "Data", "label": "Requested by",
+             "in_list_view": 1},
+            {"fieldname": "status", "fieldtype": "Select", "label": "Status",
+             "options": "Pending\nApplied\nRejected", "default": "Pending",
+             "allow_on_submit": 1, "in_list_view": 1},
+            {"fieldname": "decided_by", "fieldtype": "Data", "label": "Decided by",
+             "allow_on_submit": 1},
+            {"fieldname": "reason", "fieldtype": "Small Text", "label": "Reason",
+             "allow_on_submit": 1},
         ],
+        "permissions": _perms(grants),
     })
 
 
@@ -158,15 +272,13 @@ def masters(a: Admin) -> None:
         if not a.exists("Cost Center", name):
             a.insert({"doctype": "Cost Center", "cost_center_name": cc, "company": COMPANY,
                       "parent_cost_center": root, "is_group": 0,
-                      "po_guard_annual_budget": budget})
+                      "erp_guard_annual_budget": budget})
     a.ensure({"doctype": "Supplier Group", "supplier_group_name": SUPPLIER_GROUP,
               "parent_supplier_group": "All Supplier Groups"}, SUPPLIER_GROUP)
     a.ensure({"doctype": "Item Group", "item_group_name": ITEM_GROUP,
               "parent_item_group": "All Item Groups"}, ITEM_GROUP)
-    for code, (desc, _) in ITEMS.items():
-        a.ensure({"doctype": "Item", "item_code": code, "item_name": desc, "description": desc,
-                  "item_group": ITEM_GROUP, "stock_uom": "Nos", "is_stock_item": 0,
-                  "is_purchase_item": 1, "include_item_in_manufacturing": 0}, code)
+    items(a)
+    bank(a)
 
     have = {s["supplier_name"] for s in a.get_list("Supplier", ["supplier_name"])}
     rows = seed_suppliers("master")
@@ -176,8 +288,106 @@ def masters(a: Admin) -> None:
         a.insert({"doctype": "Supplier", "supplier_name": r["name"],
                   "supplier_group": SUPPLIER_GROUP, "supplier_type": "Company",
                   "tax_id": r["synthetic_tax_id"],
-                  "po_guard_notes": "Seeded from the City of Chicago vendor-payments ledger."})
+                  "erp_guard_notes": "Seeded from the City of Chicago vendor-payments ledger."})
     print(f"suppliers: {len(rows)} in seed file")
+
+
+def items(a: Admin) -> None:
+    """Goods are stock items with one default warehouse; services are non-stock."""
+    if not a.exists("Warehouse", WAREHOUSE):
+        raise RuntimeError(f"{WAREHOUSE} missing (the setup wizard creates it)")
+    for code, (desc, _) in ITEMS.items():
+        stock = code in STOCK_ITEMS
+        flags = {"is_stock_item": int(stock), "item_defaults": (
+            [{"company": COMPANY, "default_warehouse": WAREHOUSE}] if stock else [])}
+        if not a.exists("Item", code):
+            a.insert({"doctype": "Item", "item_code": code, "item_name": desc,
+                      "description": desc, "item_group": ITEM_GROUP, "stock_uom": "Nos",
+                      "is_purchase_item": 1, "include_item_in_manufacturing": 0, **flags})
+            continue
+        doc = a.call("GET", f"/api/resource/Item/{code}")["data"]
+        if doc["is_stock_item"] != flags["is_stock_item"]:
+            # ERPNext won't change it once the item has submitted transactions.
+            raise RuntimeError(f"Item {code} has the wrong stock flag (an older seed?); "
+                               "start from a fresh ERPNext: make reset up seed")
+        have = [(d["company"], d.get("default_warehouse")) for d in doc["item_defaults"]]
+        want = [(d["company"], d["default_warehouse"]) for d in flags["item_defaults"]]
+        if have != want:
+            a.call("PUT", f"/api/resource/Item/{code}", json=flags)
+
+
+def bank(a: Admin) -> None:
+    """The company bank as a ledger account (no Bank Account record), and the mode of
+    payment treasury uses, defaulting to it."""
+    a.ensure({"doctype": "Account", "account_name": BANK_ACCOUNT.removesuffix(f" - {ABBR}"),
+              "parent_account": f"Bank Accounts - {ABBR}", "company": COMPANY,
+              "account_type": "Bank", "is_group": 0, "root_type": "Asset"}, BANK_ACCOUNT)
+    row = {"company": COMPANY, "default_account": BANK_ACCOUNT}
+    if not a.exists("Mode of Payment", MODE_OF_PAYMENT):
+        a.insert({"doctype": "Mode of Payment", "mode_of_payment": MODE_OF_PAYMENT,
+                  "type": "Bank", "enabled": 1, "accounts": [row]})
+        return
+    doc = a.call("GET", f"/api/resource/Mode of Payment/{MODE_OF_PAYMENT}")["data"]
+    if [(r["company"], r["default_account"]) for r in doc["accounts"]] != [tuple(row.values())]:
+        a.call("PUT", f"/api/resource/Mode of Payment/{MODE_OF_PAYMENT}",
+               json={"accounts": [row]})
+
+
+# Read access the design's roles lack in ERPNext but need for their own work:
+# (doctype, role). A receipt reads the company's accounts; submitting an invoice reads its
+# items; invoicing and approving invoices read the order and receipt they match; cancelling
+# a receipt first looks for invoices against it; creating an item checks its unit exists.
+READ_GRANTS = [("Account", "Stock User"), ("Purchase Invoice", "Stock User"),
+               ("UOM", "Purchase Master Manager"),
+               ("Item", "Accounts Manager"),
+               ("Purchase Order", "Accounts User"), ("Purchase Order", "Accounts Manager"),
+               ("Purchase Receipt", "Accounts User"), ("Purchase Receipt", "Accounts Manager"),
+               # ERPNext copies the supplier's address and contact onto a receipt it maps
+               # from an order; without read on them the receiver can't receive from a
+               # supplier that has one.
+               ("Address", "Stock User"), ("Contact", "Stock User")]
+# Master data the requester role creates and edits through erp-guard (in ERPNext only Item
+# Manager writes items); changes the purchase-to-pay checks read still go through a change
+# request a second person approves, and the approver's Purchase Master Manager role saves
+# them. ERPNext already gives the role create and write on Item Price; granted again, so a
+# site where that was taken away gets it back.
+MASTER_GRANTS = [("Item", "Purchase Master Manager", "create"),
+                 ("Item", "Purchase Master Manager", "write"),
+                 ("Item Price", "Purchase Master Manager", "create"),
+                 ("Item Price", "Purchase Master Manager", "write")]
+# Submit rights the requester role lacks: sending a request for quotation and submitting a
+# supplier's quotation (neither has an approval; in ERPNext only Purchase Manager submits a
+# request for quotation by default). No money moves on either.
+SUBMIT_GRANTS = [("Request for Quotation", "Purchase User"),
+                 ("Supplier Quotation", "Purchase User")]
+_PERMS = "frappe.core.page.permission_manager.permission_manager"
+
+
+def _grant(a: Admin, doctype: str, role: str, ptype: str) -> None:
+    """Add one permission with ERPNext's permission manager (which first copies the
+    doctype's standard permissions into Custom DocPerm), unless the role already has it."""
+    rules = a.call("POST", f"/api/method/{_PERMS}.get_permissions",
+                   json={"doctype": doctype})["message"]
+    mine = [r for r in rules if r["role"] == role and r["permlevel"] == 0]
+    if any(r[ptype] for r in mine):
+        return
+    if not mine:  # a new rule, with read
+        a.call("POST", f"/api/method/{_PERMS}.add",
+               json={"parent": doctype, "role": role, "permlevel": 0})
+        if ptype == "read":
+            return
+    a.call("POST", f"/api/method/{_PERMS}.update",
+           json={"doctype": doctype, "role": role, "permlevel": 0, "ptype": ptype,
+                 "value": 1})
+
+
+def permission_grants(a: Admin) -> None:
+    for doctype, role in READ_GRANTS:
+        _grant(a, doctype, role, "read")
+    for doctype, role in SUBMIT_GRANTS:
+        _grant(a, doctype, role, "submit")
+    for doctype, role, ptype in MASTER_GRANTS:
+        _grant(a, doctype, role, ptype)
 
 
 def _works(kv: tuple[str, str], tries: int = 8) -> bool:
@@ -207,18 +417,17 @@ def _restart_backend() -> None:
 
 def users(a: Admin, retry: bool = True) -> dict[str, tuple[str, str]]:
     keys = {}
-    for email, (first, last, roles) in USERS.items():
-        want = roles + USER_ROLES_EXTRA
+    for email, (_, want) in USERS.items():
+        first, last = NAMES[email]
         if not a.exists("User", email):
             a.insert({"doctype": "User", "email": email, "first_name": first, "last_name": last,
                       "send_welcome_email": 0, "user_type": "System User",
                       "roles": [{"role": r} for r in want]})
         else:
             doc = a.call("GET", f"/api/resource/User/{email}")["data"]
-            have = [r["role"] for r in doc["roles"]]
-            if set(want) - set(have):
+            if {r["role"] for r in doc["roles"]} != set(want):
                 a.call("PUT", f"/api/resource/User/{email}",
-                       json={"roles": [{"role": r} for r in sorted(set(have) | set(want))]})
+                       json={"roles": [{"role": r} for r in want]})
         secret = a.call("POST", "/api/method/frappe.core.doctype.user.user.generate_keys",
                         json={"user": email})["message"]["api_secret"]
         key = a.call("GET", f"/api/resource/User/{email}")["data"]["api_key"]
@@ -263,16 +472,138 @@ def history(keys: dict[str, tuple[str, str]]) -> None:
             "supplier": rng.choice(suppliers), "company": COMPANY,
             "transaction_date": when.isoformat(),
             "schedule_date": (when + timedelta(days=14)).isoformat(),
-            "po_guard_cost_centre": f"{cc} - {ABBR}", "po_guard_status": "Pending Approval",
-            "po_guard_notes": "Seed history (synthetic).", "items": items})
+            "erp_guard_cost_centre": f"{cc} - {ABBR}",
+            "erp_guard_notes": HISTORY_NOTE, "items": items})
         r.raise_for_status()
         name = r.json()["data"]["name"]
         s = appr.put(f"/api/resource/Purchase Order/{name}", json={
-            "docstatus": 1, "po_guard_status": "Approved",
-            "po_guard_approver": "director@example.com"})
+            "docstatus": 1, "erp_guard_approver": "director@example.com"})
         if s.status_code >= 400:
             raise RuntimeError(f"submitting {name}: {s.text[:800]}")
     print(f"history: {len(plan)} approved orders")
+
+
+_MAKE_RECEIPT = "erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt"
+_MAKE_INVOICE = "erpnext.stock.doctype.purchase_receipt.purchase_receipt.make_purchase_invoice"
+_MAKE_PAYMENT = "erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry"
+
+
+def _submit_new(a: Admin, doc: dict, **fields) -> dict:
+    """Insert ERPNext's mapped draft with `fields` set, then submit it."""
+    doc = a.call("POST", "/api/method/frappe.client.insert", json={"doc": {**doc, **fields}})
+    return a.call("POST", "/api/method/frappe.client.submit", json={"doc": doc["message"]})[
+        "message"]
+
+
+def history_documents(a: Admin) -> None:
+    """The first six goods orders of the history were received; four of those were
+    invoiced (bill numbers HIST-INV-1..4) and two of those paid from the company bank.
+    Entered by Administrator straight into ERPNext, like the orders' own history, so none
+    of it is in erp-guard's audit trail. Runs before the workflows exist, so each document
+    is submitted directly; turning a workflow on marks submitted documents Approved."""
+    if a.get_list("Purchase Receipt", ["name"], [["docstatus", "=", 1]]):
+        return
+    orders = sorted(a.get_list("Purchase Order", ["name", "transaction_date"],
+                               [["erp_guard_notes", "=", HISTORY_NOTE], ["docstatus", "=", 1]]),
+                    key=lambda o: (o["transaction_date"], o["name"]))
+    goods = [o for o in orders if {i["item_code"] for i in a.call(
+        "GET", f"/api/resource/Purchase Order/{o['name']}")["data"]["items"]} <= STOCK_ITEMS]
+    for n, order in enumerate(goods[:6], 1):
+        on = date.fromisoformat(order["transaction_date"]) + timedelta(days=10)
+        dated = {"posting_date": on.isoformat(), "set_posting_time": 1}
+        draft = a.call("POST", f"/api/method/{_MAKE_RECEIPT}",
+                       json={"source_name": order["name"]})["message"]
+        receipt = _submit_new(a, draft, **dated)
+        if n > 4:
+            continue
+        billed = on + timedelta(days=2)
+        draft = a.call("POST", f"/api/method/{_MAKE_INVOICE}",
+                       json={"source_name": receipt["name"]})["message"]
+        invoice = _submit_new(a, draft, bill_no=f"HIST-INV-{n}", bill_date=billed.isoformat(),
+                              posting_date=billed.isoformat(), set_posting_time=1,
+                              due_date=(billed + timedelta(days=30)).isoformat())
+        if n > 2:
+            continue
+        paid = billed + timedelta(days=28)
+        draft = a.call("POST", f"/api/method/{_MAKE_PAYMENT}",
+                       json={"dt": "Purchase Invoice", "dn": invoice["name"]})["message"]
+        _submit_new(a, draft, posting_date=paid.isoformat(), mode_of_payment=MODE_OF_PAYMENT,
+                    paid_from=BANK_ACCOUNT, bank_account=None, reference_no=f"HIST-PAY-{n}",
+                    reference_date=paid.isoformat())
+    print("history: 6 receipts, 4 invoices, 2 payments")
+
+
+# Approval workflows: doctype -> (roles that submit for approval and revise, roles that
+# approve and reject). Who may approve what, and up to how much, is erp-guard's policy
+# (config/policy.toml); these roles only let the right people apply transitions.
+# Invoices: the controller (Accounts Manager), and the director as backup (Purchase
+# Manager; policy refuses the manager).
+# Change requests to master data: requesters, AP and treasury ask; a purchase approver
+# decides, never the person who asked (erp-guard's checks).
+WORKFLOWS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "Material Request": (("Purchase User",), ("Purchase Manager",)),
+    "Purchase Order": (("Purchase User",), ("Purchase Manager",)),
+    "Purchase Invoice": (("Accounts User",), ("Accounts Manager", "Purchase Manager")),
+    "Payment Entry": (("Accounts User",), ("Purchase Manager",)),
+    CHANGE_REQUEST: (CR_SUBMITTERS, CR_APPROVERS),
+}
+STATES = [("Draft", 0), ("Pending Approval", 0), ("Approved", 1), ("Rejected", 0),
+          ("Cancelled", 2)]
+# (state, action, next state, whether the approver applies it)
+TRANSITIONS = [("Draft", "Submit for Approval", "Pending Approval", False),
+               ("Pending Approval", "Approve", "Approved", True),
+               ("Pending Approval", "Reject", "Rejected", True),
+               ("Rejected", "Revise", "Draft", False)]
+# Purchase orders can also be withdrawn from approval (amend_purchase_order does this before
+# changing a pending order's lines, so it needs resubmitting).
+EXTRA_TRANSITIONS = {"Purchase Order": [("Pending Approval", "Withdraw", "Draft", False)]}
+# Purchase orders, invoices and payments: a draft cancelled through erp-guard
+# (erp_guard_cancelled) gets no more transitions. Orders, invoices and payments entering
+# Approved record who approved, in the same transaction.
+CONDITIONS = {dt: "not doc.erp_guard_cancelled"
+              for dt in ("Purchase Order", "Purchase Invoice", "Payment Entry")}
+ON_ENTER = {(dt, "Approved"): ("erp_guard_approver", "frappe.session.user")
+            for dt in ("Purchase Order", "Purchase Invoice", "Payment Entry")}
+
+
+def _workflow(doctype: str, submitters: tuple[str, ...], approvers: tuple[str, ...]) -> dict:
+    # The (first) submitter edits drafts and rejected documents, the (first) approver the
+    # rest.
+    edits = {"Draft": submitters[0], "Rejected": submitters[0]}
+    states = []
+    for st, ds in STATES:
+        row = {"state": st, "doc_status": str(ds), "allow_edit": edits.get(st, approvers[0])}
+        if (doctype, st) in ON_ENTER:
+            field, expr = ON_ENTER[(doctype, st)]
+            row |= {"update_field": field, "update_value": expr, "evaluate_as_expression": 1}
+        states.append(row)
+    return {
+        "doctype": "Workflow", "workflow_name": f"{doctype} Approval",
+        "document_type": doctype, "is_active": 1, "override_status": 0,
+        "send_email_alert": 0, "workflow_state_field": "workflow_state", "states": states,
+        "transitions": [{"state": st, "action": act, "next_state": nxt, "allowed": role,
+                         "allow_self_approval": 1, "condition": CONDITIONS.get(doctype)}
+                        for st, act, nxt, by_approver in
+                        TRANSITIONS + EXTRA_TRANSITIONS.get(doctype, [])
+                        for role in (approvers if by_approver else submitters)],
+    }
+
+
+def workflows(a: Admin) -> None:
+    """Create each workflow, or bring an existing one up to this definition (a site seeded
+    before the purchase order's workflow was turned on gets it activated here)."""
+    for state, _ in STATES:
+        a.ensure({"doctype": "Workflow State", "workflow_state_name": state}, state)
+    for _, action, _, _ in TRANSITIONS + [t for ts in EXTRA_TRANSITIONS.values() for t in ts]:
+        a.ensure({"doctype": "Workflow Action Master", "workflow_action_name": action}, action)
+    for doctype, (submitters, approvers) in WORKFLOWS.items():
+        doc = _workflow(doctype, submitters, approvers)
+        name = doc["workflow_name"]
+        if a.exists("Workflow", name):
+            a.call("PUT", f"/api/resource/Workflow/{httpx.URL(name)}", json=doc)
+        else:
+            a.insert(doc)
+    print(f"workflows: {len(WORKFLOWS)}, all active")
 
 
 def _client(kv: tuple[str, str]) -> httpx.Client:
@@ -290,7 +621,7 @@ def write_env(keys: dict[str, tuple[str, str]]) -> None:
            f"ERPNEXT_URL={URL}", f"ERPNEXT_COMPANY='{COMPANY}'",
            f"ERPNEXT_SUPPLIER_GROUP='{SUPPLIER_GROUP}'"]
     for email, (k, s) in keys.items():
-        tag = email.split("@")[0].upper()
+        tag = USERS[email][0]
         out += [f"ERPNEXT_KEY_{tag}={k}", f"ERPNEXT_SECRET_{tag}={s}"]
     k, s = keys["requester@example.com"]
     out += [f"ERPNEXT_API_KEY={k}", f"ERPNEXT_API_SECRET={s}"]
@@ -307,10 +638,15 @@ def main() -> None:
         a = Admin()
     custom_fields(a)
     audit_doctype(a)
+    change_request_doctype(a)
     masters(a)
+    permission_grants(a)
     keys = users(a)
     write_env(keys)
     history(keys)
+    a = Admin()  # a fresh session, in case users() restarted the backend
+    history_documents(a)
+    workflows(a)  # after the history, so history documents needn't pass through them
     print("ERPNext seeded; API keys in .env")
 
 

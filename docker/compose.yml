@@ -1,7 +1,7 @@
-# Local ERPNext for po-guard-mcp. Adapted from frappe_docker's pwd.yml
+# Local ERPNext for erp-guard-mcp. Adapted from frappe_docker's pwd.yml
 # (https://github.com/frappe/frappe_docker, MIT), with the image tag pinned and the port
 # bound to localhost only. Development use only: the passwords below are local defaults.
-name: po-guard-erpnext
+name: erp-guard-erpnext
 
 services:
   backend:
